@@ -239,6 +239,7 @@ function instancesFor(bills,asOf,months,paid){
   return out;
 }
 function r2(x){return Math.round(x*100)/100;}
+function effApr(d,date){return (d.promoEnd&&date<d.promoEnd)?d.apr:(d.aprAfter!=null?d.aprAfter:d.apr);}
 function simulate(cfg){
   var paid=cfg.paid||{};var paydays=genPaydays(cfg.asOf,cfg.months);
   var all=cfg.bills.concat(debtBills(cfg.debts,cfg.asOf));
@@ -252,12 +253,12 @@ function simulate(cfg){
   var by=paydays.map(function(){return [];});
   inst.forEach(function(i){by[i.fund].push(i);});
   by.forEach(function(a){a.sort(function(x,y){return x.payBy<y.payBy?-1:x.payBy>y.payBy?1:(x.due<y.due?-1:x.due>y.due?1:0);});});
-  var D={};cfg.debts.forEach(function(d){D[d.id]={id:d.id,name:d.name,bal:d.balance,apr:d.apr,min:d.min};});
+  var D={};cfg.debts.forEach(function(d){D[d.id]={id:d.id,name:d.name,bal:d.balance,apr:d.apr,min:d.min,promo:d.promoEnd||null,aprAfter:(d.aprAfter!=null?d.aprAfter:d.apr)};});
   var ids=Object.keys(D);var rows=[];var paidOff={};var interest=0;
   function total(){return ids.reduce(function(s,k){return s+Math.max(0,D[k].bal);},0);}
   var series=[{date:cfg.asOf,total:total()}];
   for(var i=0;i<paydays.length;i++){
-    if(i>0)ids.forEach(function(k){var d=D[k];if(d.bal>0.005){var x=r2(d.bal*d.apr/2400);d.bal=r2(d.bal+x);interest+=x;}});
+    if(i>0)ids.forEach(function(k){var d=D[k];if(d.bal>0.005){var x=r2(d.bal*(d.promo&&paydays[i]<d.promo?d.apr:d.aprAfter)/2400);d.bal=r2(d.bal+x);interest+=x;}});
     var items=[];var billsTotal=0;
     by[i].forEach(function(it){
       if(it.debtId){var d=D[it.debtId];if(!d||d.bal<=0.005)return;var amt=r2(Math.min(d.min,d.bal));d.bal=r2(d.bal-amt);items.push(Object.assign({},it,{amount:amt}));billsTotal+=amt;}
@@ -270,13 +271,27 @@ function simulate(cfg){
     if(i===0&&cfg.bonus>0){avail=r2(avail+cfg.bonus);lump+=cfg.bonus;}
     if(cfg.bonusBy&&cfg.bonusBy[dt]>0){avail=r2(avail+cfg.bonusBy[dt]);lump+=cfg.bonusBy[dt];}
     var extras=[];var extraTotal=0;
+    function addExtra(k,amt){
+      var ex=null;for(var z=0;z<extras.length;z++)if(extras[z].debtId===k)ex=extras[z];
+      if(ex)ex.amount=r2(ex.amount+amt);else extras.push({key:'extra:'+k+'@'+paydays[i],debtId:k,name:D[k].name,amount:amt,date:paydays[i]});
+      D[k].bal=r2(D[k].bal-amt);avail=r2(avail-amt);extraTotal=r2(extraTotal+amt);
+    }
+    if(cfg.strategy!=='min'){
+      ids.forEach(function(k){
+        var d=D[k];if(!d.promo||d.bal<=0.005||paydays[i]>=d.promo||avail<=0.005)return;
+        var left=0;for(var q=i;q<paydays.length&&paydays[q]<d.promo;q++)left++;
+        var need=r2(d.bal/Math.max(1,left));var mp=0;
+        items.forEach(function(it){if(it.debtId===k)mp=r2(mp+it.amount);});
+        var amt=r2(Math.min(Math.max(0,need-mp),avail,d.bal));
+        if(amt>0.005)addExtra(k,amt);
+      });
+    }
     if(cfg.strategy!=='min'&&avail>0.005){
       var order=ids.filter(function(k){return D[k].bal>0.005;});
-      order.sort(cfg.strategy==='snowball'?function(a,b){return D[a].bal-D[b].bal;}:function(a,b){return (D[b].apr-D[a].apr)||(D[a].bal-D[b].bal);});
+      order.sort(cfg.strategy==='snowball'?function(a,b){return D[a].bal-D[b].bal;}:function(a,b){var ra=(D[a].promo&&paydays[i]<D[a].promo)?D[a].apr:D[a].aprAfter,rb=(D[b].promo&&paydays[i]<D[b].promo)?D[b].apr:D[b].aprAfter;return (rb-ra)||(D[a].bal-D[b].bal);});
       for(var q=0;q<order.length;q++){
         var k2=order[q];if(avail<=0.005)break;
-        var amt2=r2(Math.min(avail,D[k2].bal));D[k2].bal=r2(D[k2].bal-amt2);avail=r2(avail-amt2);extraTotal=r2(extraTotal+amt2);
-        extras.push({key:'extra:'+k2+'@'+paydays[i],debtId:k2,name:D[k2].name,amount:amt2,date:paydays[i]});
+        var amt2=r2(Math.min(avail,D[k2].bal));if(amt2>0.005)addExtra(k2,amt2);
       }
     }
     ids.forEach(function(k){if(D[k].bal<=0.005&&!paidOff[k]){paidOff[k]=paydays[i];D[k].bal=0;}});
@@ -671,6 +686,10 @@ function readStubFile(file){
   };
   fr.readAsArrayBuffer(file);
 }
+function aprText(x){
+  if(x.promoEnd)return '0% until '+fShort(x.promoEnd)+' '+x.promoEnd.slice(0,4)+', then '+x.aprAfter+'%';
+  return (x.apr?x.apr+'% APR'+(x.aprKnown?'':' (estimated)'):'0% APR');
+}
 function checkDates(){return genPaydays(S.settings.asOf,4).slice(0,6);}
 function simFor(A){return S.settings.strategy==='min'?A.min:A.plan;}
 function viewCheck(A){
@@ -696,7 +715,7 @@ function viewCheck(A){
   h+='<div class="al"><b>2. Living money</b><b class="num">'+money(r.living)+'</b></div>';
   h+='<div class="al"><b>3. Extra toward debt</b><b class="num">'+money(r.extraTotal)+'</b></div>';
   var dm={};S.debts.forEach(function(x){dm[x.id]=x;});
-  r.extras.forEach(function(e){var x=dm[e.debtId]||{};h+='<div class="al"><span>Send to '+esc(e.name)+'<small>'+(x.apr?x.apr+'% APR'+(x.aprKnown?'':' (estimated)'):'')+' · balance '+money(x.balance||0)+'</small></span><span class="num">'+money(e.amount)+'</span></div>';});
+  r.extras.forEach(function(e){var x=dm[e.debtId]||{};h+='<div class="al"><span>Send to '+esc(e.name)+'<small>'+aprText(x)+' · balance '+money(x.balance||0)+'</small></span><span class="num">'+money(e.amount)+'</span></div>';});
   if(!r.extras.length&&st.strategy!=='min')h+='<div class="al"><span class="muted">Nothing left for extra payments</span><span></span></div>';
   if(st.strategy==='min')h+='<div class="al"><span class="muted">Strategy is minimums only</span><span></span></div>';
   h+='<div class="al"><b>'+(r.short>0?'Short by':'Left over')+'</b><b class="num" style="color:var(--'+(r.short>0?'bad':'ink')+')">'+money(r.short>0?r.short:r.left)+'</b></div>';
@@ -706,6 +725,10 @@ function viewCheck(A){
   if(d===ds[0])h+='<div class="row-btns"><button class="btn pri" data-act="apply-check">I paid all of this: update my balances</button></div><p class="xs muted">Marks these items paid, lowers each debt by what you sent, adds about half a month of interest, and moves the plan to your next check.</p>';
   else h+='<p class="xs muted">Apply the earlier check first. Then this one becomes the next check.</p>';
   h+='</section>';
+  S.debts.forEach(function(x){
+    if(!x.promoEnd)return;var po=simFor(A).paidOff[x.id];var ok=po&&po<x.promoEnd;
+    h+='<section class="card data-sec" style="border-color:var(--'+(ok?'good':'bad')+')"><h2>'+esc(x.name)+': no-interest deadline</h2><p>'+(ok?'On pace. This plan pays it off by '+fShort(po)+' '+po.slice(0,4)+', before the promo ends on '+fShort(x.promoEnd)+' '+x.promoEnd.slice(0,4)+'.':'At risk. At this pace it will not be paid off before '+fShort(x.promoEnd)+' '+x.promoEnd.slice(0,4)+'. If it is deferred interest, interest back to the purchase date may be added.')+'</p><p class="xs muted">The plan sets aside enough from each check to clear it before the date. Confirm the exact end date on your statement.</p><label class="f">No-interest ends<input type="date" data-promo="'+esc(x.id)+'" value="'+x.promoEnd+'"></label></section>';
+  });
   h+='<section class="card data-sec"><h2>Update from your statements</h2><p class="muted">Type the exact balance and APR from each statement. Accurate numbers make the split accurate. Items marked estimated are my guesses.</p>';
   S.debts.forEach(function(x){h+='<div class="grid2"><label class="f">'+esc(x.name)+' balance<input type="number" step="0.01" inputmode="decimal" data-bal="'+esc(x.id)+'" value="'+x.balance+'"></label><label class="f">APR %'+(x.aprKnown?'':' (estimated)')+'<input type="number" step="0.01" inputmode="decimal" data-aprf="'+esc(x.id)+'" value="'+x.apr+'"></label></div>';});
   h+='<p class="xs muted">Balances last set '+fShort(st.asOf)+'.</p></section>';
@@ -718,7 +741,7 @@ function applyCheck(){
   var debts=clone(S.debts),find=function(id){return debts.filter(function(x){return x.id===id;})[0];};
   r.items.forEach(function(it){if(it.debtId){var x=find(it.debtId);if(x)x.balance=r2(Math.max(0,x.balance-it.amount));}});
   r.extras.forEach(function(e){var x=find(e.debtId);if(x)x.balance=r2(Math.max(0,x.balance-e.amount));});
-  debts.forEach(function(x){x.balance=x.balance>0.005?r2(x.balance*(1+x.apr/2400)):0;});
+  debts.forEach(function(x){x.balance=x.balance>0.005?r2(x.balance*(1+effApr(x,addDays(r.date,14))/2400)):0;});
   var pm={};r.items.forEach(function(it){pm[it.key]=TODAY;});r.extras.forEach(function(e){pm[e.key]=TODAY;});
   var log=clone((S.docs.log&&S.docs.log.items)||[]);
   log.push({date:r.date,net:r.income,bills:r.billsTotal,living:r.living,extra:r.extraTotal,left:r.left,at:TODAY});
@@ -737,6 +760,7 @@ $('#app').addEventListener('change',function(e){
     if(f==='incBonus')cur.incBonus=t.checked;else{var s=String(t.value).trim();cur[f]=s===''?null:num(s,null);}
     var o={};o[S.chk.date]=cur;wUpd('checks',{map:o});render();return;
   }
+  if(t.dataset.promo&&t.value){var it2=clone(S.debts),y=it2.filter(function(q){return q.id===t.dataset.promo;})[0];if(y){y.promoEnd=t.value;wSet('debts',{items:it2});render();}return;}
   if(t.dataset.bal||t.dataset.aprf){
     var id=t.dataset.bal||t.dataset.aprf,items=clone(S.debts),x=items.filter(function(q){return q.id===id;})[0];if(!x)return;
     if(t.dataset.bal)x.balance=Math.max(0,r2(num(t.value,x.balance)));else{x.apr=Math.max(0,num(t.value,x.apr));x.aprKnown=true;}
