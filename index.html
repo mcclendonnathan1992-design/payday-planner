@@ -427,7 +427,10 @@ function viewData(){
 }
 function importText(txt){
   var p;try{p=JSON.parse(txt);}catch(e){toast('That is not a valid data file.');return;}
+  var prevDocs=S.docs;
   if(!adopt(p)){toast('That file is missing bills or debts.');return;}
+  try{var pc=(prevDocs.checks&&prevDocs.checks.map)||{},nc=S.docs.checks.map;Object.keys(pc).forEach(function(k){if(!nc[k])nc[k]=pc[k];});
+  var pl=(prevDocs.log&&prevDocs.log.items)||[],nl=S.docs.log.items,have={};nl.forEach(function(l){have[l.date]=1;});pl.forEach(function(l){if(!have[l.date])nl.push(l);});}catch(e){}
   commit();S.view='pay';location.hash='pay';render();toast('Data imported.');
 }
 $('#app').addEventListener('change',function(e){
@@ -499,7 +502,7 @@ function viewPay(A){
   var att=[];
   rows.forEach(function(r){r.items.forEach(function(it){if(!S.paid[it.key]&&daysBetween(TODAY,it.due)<=3)att.push(it);});});
   att.sort(function(a,b){return a.due<b.due?-1:1;});
-  var out='<div class="card info small">Got a new pay stub? Open the <b>Paycheck</b> tab to get the exact split for that check.</div>';
+  var out='<div class="card info small" style="display:flex;flex-direction:column;gap:8px"><span>Got a new pay stub? Add it and I will read it and show exactly what to pay and what is left.</span><span><label class="btn pri" for="file-stub-home" style="display:inline-block">Add pay stub (PDF or photo)</label><input type="file" id="file-stub-home" accept="application/pdf,.pdf,image/*" multiple hidden></span></div>';
   if(daysBetween(st.asOf,TODAY)>14)out+='<div class="card info small">Your balances are from '+fShort(st.asOf)+'. Update them in the Paycheck tab so the extra payments stay accurate.</div>';
   if(next){
     var nextLeft=next.billsTotal;var nextEntry=((S.docs.checks&&S.docs.checks.map)||{})[next.date]||null;
@@ -649,49 +652,80 @@ function parseStub(text){
   var t=text.replace(/\s+/g,' ');var o={};var m;
   m=t.match(/NET PAY:?\s*\$?\s*([\d,]+\.\d{2})/i)||t.match(/Net Pay\s*\$?\s*([\d,]+\.\d{2})/i);if(m)o.net=parseFloat(m[1].replace(/,/g,''));
   m=t.match(/Total Hours:?\s*([\d.]+)/i);if(m)o.hours=parseFloat(m[1]);
-  m=t.match(/Pay Date:?\s*(\d{4}-\d{2}-\d{2})/i);if(m)o.date=m[1];
+  m=t.match(/Pay Date:?\s*(\d{4}-\d{2}-\d{2})/i);
+  if(m)o.date=m[1];else{var all=t.match(/\d{4}-\d{2}-\d{2}/g);if(all)o.date=all.sort().pop();}
   o.bonus=/\bBONUS\b/i.test(t);
   return o;
 }
-function loadPdfJs(){
+function loadScript(src,test){
   return new Promise(function(res,rej){
-    if(window.pdfjsLib)return res(window.pdfjsLib);
-    var s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
-    s.onload=function(){window.pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';res(window.pdfjsLib);};
-    s.onerror=function(){rej(new Error('load'));};document.head.appendChild(s);
+    if(test())return res();
+    var s=document.createElement('script');s.src=src;s.onload=function(){res();};s.onerror=function(){rej(new Error('load'));};document.head.appendChild(s);
   });
 }
-function readStubFile(file){
-  S.chk.msg='Reading your stub...';render();
-  var fr=new FileReader();
-  fr.onerror=function(){S.chk.msg='Could not open that file.';render();};
-  fr.onload=function(){
-    loadPdfJs().then(function(lib){return lib.getDocument({data:new Uint8Array(fr.result)}).promise;}).then(function(doc){
-      var jobs=[];for(var i=1;i<=doc.numPages;i++)jobs.push(doc.getPage(i).then(function(pg){return pg.getTextContent();}).then(function(c){return c.items.map(function(x){return x.str;}).join(' ');}));
-      return Promise.all(jobs);
-    }).then(function(parts){
-      var o=parseStub(parts.join(' '));
-      if(!(o.net>0)){S.chk.msg='I could not find the net pay in that file. Type it in below.';render();return;}
-      var ds=checkDates();var d=(o.date&&ds.indexOf(o.date)>-1)?o.date:S.chk.date;
-      var st=S.settings,entry={net:o.net,stubNet:o.net,hours:o.hours||null,living:null,bonusNet:null,incBonus:false,src:'stub'};
-      var msg='Read your stub: net pay '+money(o.net)+(o.hours?', '+o.hours+' hours':'')+(o.date?', paid '+o.date:'')+'.';
-      if(o.bonus){
-        var reg=r2(st.takeHome*(o.hours?o.hours/88:1));
-        entry.net=reg;entry.bonusNet=r2(o.net-reg);
-        msg+=' It includes a bonus, so I am planning with your regular take-home of '+money(reg)+'. Edit the net pay below if you know the exact regular amount.';
-      }
-      if(o.date&&ds.indexOf(o.date)<0)msg+=' That pay date is not one of your upcoming checks, so it was applied to '+d+'.';
-      S.chk.date=d;S.chk.msg=msg;
-      var upd={};upd[d]=entry;wUpd('checks',{map:upd});render();
-    }).catch(function(){S.chk.msg='Could not read the PDF here (it needs internet the first time). Type the net pay in below.';render();});
-  };
-  fr.readAsArrayBuffer(file);
+function loadPdfJs(){
+  return loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js',function(){return !!window.pdfjsLib;}).then(function(){
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';return window.pdfjsLib;
+  });
+}
+function fileText(file){
+  var isPdf=/pdf$/i.test(file.type)||/\.pdf$/i.test(file.name);
+  if(isPdf){
+    return new Promise(function(res,rej){var fr=new FileReader();fr.onerror=rej;fr.onload=function(){res(fr.result);};fr.readAsArrayBuffer(file);})
+    .then(function(buf){return loadPdfJs().then(function(lib){return lib.getDocument({data:new Uint8Array(buf)}).promise;});})
+    .then(function(doc){var jobs=[];for(var i=1;i<=doc.numPages;i++)jobs.push(doc.getPage(i).then(function(pg){return pg.getTextContent();}).then(function(c){return c.items.map(function(x){return x.str;}).join(' ');}));return Promise.all(jobs);})
+    .then(function(parts){return parts.join(' ');});
+  }
+  return loadScript('https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js',function(){return !!window.Tesseract;})
+    .then(function(){return window.Tesseract.recognize(file,'eng');}).then(function(r){return r.data.text;});
+}
+function nearestPayday(date){
+  var all=genPaydays(addDays(date,-20),2),best=null,bd=99;
+  all.forEach(function(d){var k=Math.abs(daysBetween(d,date));if(k<bd){bd=k;best=d;}});
+  return bd<=3?best:null;
+}
+function readOneStub(file){
+  return fileText(file).then(function(txt){
+    var o=parseStub(txt);var st=S.settings;
+    if(!(o.net>0))return {ok:false,msg:file.name+': I could not find the net pay. Type it in below.'};
+    var d=o.date?nearestPayday(o.date):null;
+    if(!d)return {ok:false,msg:file.name+': net pay '+money(o.net)+' found, but the pay date'+(o.date?' ('+o.date+')':'')+' did not match one of your paydays. Pick the date below and type the net pay.'};
+    if(d<st.asOf)return {ok:false,msg:file.name+': that check ('+d+') is already behind you, so it was not added to the plan. Net pay was '+money(o.net)+'.'};
+    var entry={net:o.net,stubNet:o.net,hours:o.hours||null,living:null,bonusNet:null,incBonus:false,src:'stub'};
+    var msg=file.name+': read net pay '+money(o.net)+(o.hours?', '+o.hours+' hours':'')+' for the '+d+' check.';
+    if(o.bonus){
+      var reg=r2(st.takeHome*(o.hours?o.hours/88:1));
+      entry.net=reg;entry.bonusNet=r2(o.net-reg);
+      msg+=' It includes a bonus, so I plan with your regular take-home of '+money(reg)+'. Edit net pay if you know the exact regular amount.';
+    }
+    var prev=((S.docs.checks&&S.docs.checks.map)||{})[d]||{};
+    ['living','savings','cash','other','otherLabel'].forEach(function(k){if(prev[k]!=null)entry[k]=prev[k];});
+    var upd={};upd[d]=entry;wUpd('checks',{map:upd});
+    return {ok:true,date:d,msg:msg};
+  }).catch(function(){return {ok:false,msg:file.name+': could not read it here (it needs internet the first time). Type the net pay below.'};});
+}
+function readStubFiles(files){
+  var list=Array.prototype.slice.call(files);if(!list.length)return;
+  S.chk.msg='Reading '+list.length+' file'+(list.length>1?'s':'')+'...';render();
+  var out=[];
+  list.reduce(function(p,f){return p.then(function(){return readOneStub(f).then(function(r){out.push(r);});});},Promise.resolve()).then(function(){
+    var dates=out.filter(function(r){return r.ok;}).map(function(r){return r.date;}).sort();
+    S.chk.msg=out.map(function(r){return r.msg;}).join('\n');
+    if(dates.length)S.chk.date=dates[0];
+    S.view='check';if(location.hash!=='#check')location.hash='check';
+    render();window.scrollTo(0,0);
+    if(dates.length)toast('Stub read. Your breakdown is ready.');
+  });
+}
+function checkDates(){
+  var long=genPaydays(S.settings.asOf,24),ds=long.slice(0,6);
+  if(S.chk.date&&ds.indexOf(S.chk.date)<0&&long.indexOf(S.chk.date)>-1)ds.push(S.chk.date);
+  return ds;
 }
 function aprText(x){
   if(x.promoEnd)return '0% until '+fShort(x.promoEnd)+' '+x.promoEnd.slice(0,4)+', then '+x.aprAfter+'%';
   return (x.apr?x.apr+'% APR'+(x.aprKnown?'':' (estimated)'):'0% APR');
 }
-function checkDates(){return genPaydays(S.settings.asOf,4).slice(0,6);}
 function simFor(A){return S.settings.strategy==='min'?A.min:A.plan;}
 function viewCheck(A){
   var st=S.settings,ds=checkDates();
@@ -701,8 +735,8 @@ function viewCheck(A){
   var v=function(x){return x==null?'':x;};
   var h='<section class="card data-sec"><h2>Your paycheck</h2><p class="muted">Pick the pay date, then read your stub or type the net pay. The split below updates to the penny.</p>'+
   '<label class="f">Pay date<select data-chk="date">'+ds.map(function(x){return '<option value="'+x+'"'+(x===d?' selected':'')+'>'+fLong(x)+(x===ds[0]?' (next)':'')+'</option>';}).join('')+'</select></label>'+
-  '<div class="row-btns"><label class="btn pri" for="file-stub" style="display:inline-block">Read my pay stub (PDF)</label><input type="file" id="file-stub" accept="application/pdf,.pdf" hidden></div>'+
-  (S.chk.msg?'<p class="small">'+esc(S.chk.msg)+'</p>':'')+
+  '<div class="row-btns"><label class="btn pri" for="file-stub" style="display:inline-block">Add pay stub (PDF or photo)</label><input type="file" id="file-stub" accept="application/pdf,.pdf,image/*" multiple hidden></div>'+
+  (S.chk.msg?'<p class="small" style="white-space:pre-line">'+esc(S.chk.msg)+'</p>':'')+
   '<div class="grid2"><label class="f">Net pay (take-home)<input type="number" step="0.01" inputmode="decimal" data-chk="net" value="'+v(sv.net)+'" placeholder="'+st.takeHome+' (estimate)"></label>'+
   '<label class="f">Living money this check<input type="number" step="0.01" inputmode="decimal" data-chk="living" value="'+v(sv.living)+'" placeholder="'+r2(st.living/2)+' (default)"></label></div>'+
   (sv.bonusNet>0?'<label class="chk"><input type="checkbox" data-chk="incBonus"'+(sv.incBonus?' checked':'')+'>Also put the '+money(sv.bonusNet)+' bonus take-home toward debt</label>':'')+
@@ -721,6 +755,7 @@ function viewCheck(A){
   (reqd>r.held+0.005?'<p class="small" style="color:var(--warn)">Only '+money(r.held)+' of your '+money(r2(reqd))+' fits this check, so the rest was cut.</p>':'')+
   ((tot.savings+tot.cash+tot.other)>0?'<p class="xs muted">Set aside on earlier checks: savings '+money(tot.savings)+', cash '+money(tot.cash)+', other '+money(tot.other)+'.</p>':'')+'</section>';
   h+='<section class="card data-sec"><h2>Where every dollar goes</h2><p class="muted">Check of '+fLong(d)+' · '+money(net)+(sv.net!=null?' from your entry':' estimated')+(r.lump>0?' + '+money(r.lump)+' bonus':'')+'</p>';
+  h+='<p class="small"><b>Summary:</b> pay '+money(r.billsTotal)+' in bills and minimums'+(r.held>0?', set aside '+money(r.held):'')+', send '+money(r.extraTotal)+' extra to debt, and you keep '+money(r2(r.living+(r.short>0?0:r.left)))+' ('+money(r.living)+' living'+(r.left>0.005&&!(r.short>0)?' + '+money(r.left)+' left over':'')+').</p>';
   h+='<div class="al"><b>1. Bills and minimums</b><b class="num">'+money(r.billsTotal)+'</b></div>';
   r.items.forEach(function(it){h+='<div class="al"><span>'+esc(it.name)+'<small>'+(it.autopay?'Autopay '+fShort(it.due)+', keep it in the account':'Due '+fShort(it.due)+' · pay by '+fShort(it.payBy))+(it.kind==='debt'?' · minimum':'')+'</small></span><span class="num">'+money(it.amount)+'</span></div>';});
   if(!r.items.length)h+='<div class="al"><span class="muted">Nothing due before the next check</span><span></span></div>';
@@ -769,7 +804,7 @@ function applyCheck(){
 }
 $('#app').addEventListener('change',function(e){
   var t=e.target;
-  if(t.id==='file-stub'&&t.files&&t.files[0]){readStubFile(t.files[0]);t.value='';return;}
+  if((t.id==='file-stub'||t.id==='file-stub-home')&&t.files&&t.files.length){readStubFiles(t.files);t.value='';return;}
   if(t.dataset.chk){
     var f=t.dataset.chk;
     if(f==='date'){S.chk.date=t.value;S.chk.msg='';render();return;}
