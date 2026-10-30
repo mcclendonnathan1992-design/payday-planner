@@ -149,12 +149,13 @@ svg.ch polyline{fill:none;stroke-linejoin:round;stroke-linecap:round}
 html,body{margin:0}
 [hidden]{display:none!important}
 button{font-family:inherit;color:inherit;cursor:pointer}
-.tab{font-size:13px}
+.tab{font-size:12.5px;padding-inline:2px}
 .data-sec{display:flex;flex-direction:column;gap:10px;margin-bottom:14px}
 .data-sec p{margin:0}
 .row-btns{display:flex;gap:8px;flex-wrap:wrap}
 code{background:var(--surface2);padding:1px 5px;border-radius:5px;font-size:13px;word-break:break-all}
 textarea.paste{width:100%;min-height:90px;font-size:13px;font-family:ui-monospace,monospace;background:var(--surface);border:1px solid var(--line);border-radius:9px;color:var(--ink);padding:9px}
+.al{display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid var(--line)}.al small{display:block;color:var(--ink2);font-size:12px;font-weight:400}.al.tot{border-bottom:0;font-weight:700}.data-sec .f{display:flex;flex-direction:column;gap:4px;font-size:13px}
 </style>
 
 </head>
@@ -164,7 +165,8 @@ textarea.paste{width:100%;min-height:90px;font-size:13px;font-family:ui-monospac
     <div class="topin"><h1>Payday Planner</h1><p id="sub"></p></div>
     <nav class="tabs" role="tablist" aria-label="Sections">
       <button class="tab" role="tab" data-tab="pay" id="t-pay">Pay</button>
-      <button class="tab" role="tab" data-tab="debts" id="t-debts">Debt plan</button>
+      <button class="tab" role="tab" data-tab="check" id="t-check">Paycheck</button>
+      <button class="tab" role="tab" data-tab="debts" id="t-debts">Debts</button>
       <button class="tab" role="tab" data-tab="bills" id="t-bills">Bills</button>
       <button class="tab" role="tab" data-tab="data" id="t-data">Data</button>
     </nav>
@@ -236,6 +238,7 @@ function instancesFor(bills,asOf,months,paid){
   });
   return out;
 }
+function r2(x){return Math.round(x*100)/100;}
 function simulate(cfg){
   var paid=cfg.paid||{};var paydays=genPaydays(cfg.asOf,cfg.months);
   var all=cfg.bills.concat(debtBills(cfg.debts,cfg.asOf));
@@ -254,27 +257,31 @@ function simulate(cfg){
   function total(){return ids.reduce(function(s,k){return s+Math.max(0,D[k].bal);},0);}
   var series=[{date:cfg.asOf,total:total()}];
   for(var i=0;i<paydays.length;i++){
-    if(i>0)ids.forEach(function(k){var d=D[k];if(d.bal>0.005){var x=d.bal*d.apr/2400;d.bal+=x;interest+=x;}});
+    if(i>0)ids.forEach(function(k){var d=D[k];if(d.bal>0.005){var x=r2(d.bal*d.apr/2400);d.bal=r2(d.bal+x);interest+=x;}});
     var items=[];var billsTotal=0;
     by[i].forEach(function(it){
-      if(it.debtId){var d=D[it.debtId];if(!d||d.bal<=0.005)return;var amt=Math.min(d.min,d.bal);d.bal-=amt;items.push(Object.assign({},it,{amount:amt}));billsTotal+=amt;}
+      if(it.debtId){var d=D[it.debtId];if(!d||d.bal<=0.005)return;var amt=r2(Math.min(d.min,d.bal));d.bal=r2(d.bal-amt);items.push(Object.assign({},it,{amount:amt}));billsTotal+=amt;}
       else{items.push(it);billsTotal+=it.amount;}
     });
-    var liv=cfg.living/2;var avail=cfg.takeHome-billsTotal-liv;var lump=0;
-    if(i===0&&cfg.bonus>0){avail+=cfg.bonus;lump=cfg.bonus;}
+    billsTotal=r2(billsTotal);var dt=paydays[i];
+    var inc=(cfg.netBy&&cfg.netBy[dt]!=null)?cfg.netBy[dt]:cfg.takeHome;
+    var liv=(cfg.livBy&&cfg.livBy[dt]!=null)?cfg.livBy[dt]:r2(cfg.living/2);
+    var avail=r2(inc-billsTotal-liv);var lump=0;
+    if(i===0&&cfg.bonus>0){avail=r2(avail+cfg.bonus);lump+=cfg.bonus;}
+    if(cfg.bonusBy&&cfg.bonusBy[dt]>0){avail=r2(avail+cfg.bonusBy[dt]);lump+=cfg.bonusBy[dt];}
     var extras=[];var extraTotal=0;
     if(cfg.strategy!=='min'&&avail>0.005){
       var order=ids.filter(function(k){return D[k].bal>0.005;});
       order.sort(cfg.strategy==='snowball'?function(a,b){return D[a].bal-D[b].bal;}:function(a,b){return (D[b].apr-D[a].apr)||(D[a].bal-D[b].bal);});
       for(var q=0;q<order.length;q++){
         var k2=order[q];if(avail<=0.005)break;
-        var amt2=Math.min(avail,D[k2].bal);D[k2].bal-=amt2;avail-=amt2;extraTotal+=amt2;
+        var amt2=r2(Math.min(avail,D[k2].bal));D[k2].bal=r2(D[k2].bal-amt2);avail=r2(avail-amt2);extraTotal=r2(extraTotal+amt2);
         extras.push({key:'extra:'+k2+'@'+paydays[i],debtId:k2,name:D[k2].name,amount:amt2,date:paydays[i]});
       }
     }
     ids.forEach(function(k){if(D[k].bal<=0.005&&!paidOff[k]){paidOff[k]=paydays[i];D[k].bal=0;}});
     series.push({date:paydays[i],total:total()});
-    rows.push({date:paydays[i],income:cfg.takeHome,items:items,billsTotal:billsTotal,living:liv,extras:extras,extraTotal:extraTotal,left:Math.max(0,avail),short:avail<-0.005?-avail:0,lump:lump});
+    rows.push({date:paydays[i],income:inc,items:items,billsTotal:billsTotal,living:liv,extras:extras,extraTotal:extraTotal,left:Math.max(0,avail),short:avail<-0.005?-avail:0,lump:lump});
   }
   var free=ids.length&&ids.every(function(k){return paidOff[k];})?ids.map(function(k){return paidOff[k];}).sort().pop():null;
   return {rows:rows,paidOff:paidOff,interest:interest,series:series,debtFree:free,paydays:paydays};
@@ -298,8 +305,8 @@ function clone(x){return JSON.parse(JSON.stringify(x));}
 function num(v,def){var n=parseFloat(v);return isFinite(n)?n:def;}
 
 /* ---------- state ---------- */
-var VIEWS=['pay','debts','bills','data'];
-var S={db:null,noDb:false,err:null,docs:{},loaded:{},ready:false,settings:null,debts:null,bills:null,paid:{},
+var VIEWS=['pay','check','debts','bills','data'];
+var S={chk:{date:null,msg:'',busy:false},db:null,noDb:false,err:null,docs:{},loaded:{},ready:false,settings:null,debts:null,bills:null,paid:{},
   view:'pay',sub:'paycheck',editing:null,userOpen:new Set(),userClosed:new Set(),pending:false};
 var DOCS={settings:'tracker/settings',debts:'tracker/debts',bills:'tracker/bills',paid:'tracker/paid'};
 var GROUPS=['Housing','Utilities','Insurance','Medical','Pay later','Other'];
@@ -322,7 +329,7 @@ function payload(){return {v:1,updatedAt:updatedAt,docs:S.docs};}
 function adopt(p){
   var docs=p&&p.docs;
   if(!docs||!docs.settings||!docs.debts||!docs.bills)return false;
-  S.docs={settings:docs.settings,debts:docs.debts,bills:docs.bills,paid:docs.paid||{map:{}}};
+  S.docs={settings:docs.settings,debts:docs.debts,bills:docs.bills,paid:docs.paid||{map:{}},checks:docs.checks||{map:{}},log:docs.log||{items:[]}};
   updatedAt=+p.updatedAt||Date.now();recompute();return true;
 }
 function saveLocal(){if(!lsSet(LS_DATA,JSON.stringify(payload())))toast('Could not save on this device. Export a backup from the Data tab.');}
@@ -331,7 +338,7 @@ function commit(){updatedAt=Date.now();saveLocal();if(sync.token&&sync.gistId){c
 function wSet(key,data){S.docs[key]=data;recompute();commit();}
 function wUpd(key,data){
   var cur=S.docs[key]||{};
-  if(key==='paid'){var m=Object.assign({},cur.map||{},data.map||{});S.docs.paid={map:m};}
+  if(key==='paid'||key==='checks'){var m=Object.assign({},cur.map||{},data.map||{});S.docs[key]={map:m};}
   else S.docs[key]=Object.assign({},cur,data);
   recompute();commit();
 }
@@ -379,7 +386,7 @@ function boot(){
 
 /* ---------- onboarding / data tab ---------- */
 function blankData(){
-  return {settings:{takeHome:5000,living:3000,buffer:2,strategy:'avalanche',bonusAmount:0,useBonus:false,asOf:TODAY,stubNet:0,stubDate:''},debts:{items:[]},bills:{items:[]},paid:{map:{}}};
+  return {settings:{takeHome:5000,living:3000,buffer:2,strategy:'avalanche',bonusAmount:0,useBonus:false,asOf:TODAY,stubNet:0,stubDate:''},debts:{items:[]},bills:{items:[]},paid:{map:{}},checks:{map:{}},log:{items:[]}};
 }
 function importControls(){
   return '<div class="row-btns"><label class="btn pri" for="file-import" style="display:inline-block">Choose data file</label><input type="file" id="file-import" accept=".json,application/json" hidden></div>'+
@@ -436,7 +443,9 @@ $('#app').addEventListener('click',function(e){
 /* ---------- derived ---------- */
 function cfgBase(){
   var st=S.settings;
-  return {bills:S.bills,debts:S.debts,asOf:st.asOf,months:120,buffer:st.buffer,takeHome:st.takeHome,living:st.living,paid:S.paid};
+  var netBy={},livBy={},bonusBy={};var cm=(S.docs.checks&&S.docs.checks.map)||{};
+  Object.keys(cm).forEach(function(k){var c=cm[k];if(!c)return;if(c.net!=null)netBy[k]=c.net;if(c.living!=null)livBy[k]=c.living;if(c.incBonus&&c.bonusNet>0)bonusBy[k]=c.bonusNet;});
+  return {bills:S.bills,debts:S.debts,asOf:st.asOf,months:120,buffer:st.buffer,takeHome:st.takeHome,living:st.living,paid:S.paid,netBy:netBy,livBy:livBy,bonusBy:bonusBy};
 }
 function scenarios(){
   var b=cfgBase(),st=S.settings;
@@ -474,8 +483,8 @@ function viewPay(A){
   var att=[];
   rows.forEach(function(r){r.items.forEach(function(it){if(!S.paid[it.key]&&daysBetween(TODAY,it.due)<=3)att.push(it);});});
   att.sort(function(a,b){return a.due<b.due?-1:1;});
-  var out='';
-  if(daysBetween(st.asOf,TODAY)>14)out+='<div class="card info small">Your balances are from '+fShort(st.asOf)+'. Update them in the Debt plan tab so the extra payments stay accurate.</div>';
+  var out='<div class="card info small">Got a new pay stub? Open the <b>Paycheck</b> tab to get the exact split for that check.</div>';
+  if(daysBetween(st.asOf,TODAY)>14)out+='<div class="card info small">Your balances are from '+fShort(st.asOf)+'. Update them in the Paycheck tab so the extra payments stay accurate.</div>';
   if(next){
     var nextLeft=next.billsTotal;
     out+='<section class="card hero"><div><div class="eyebrow">Next payday</div><div class="bigdate">'+fLong(next.date)+'</div><div class="muted small">'+rel(next.date)+'</div></div>'+
@@ -619,15 +628,134 @@ function sheetHTML(e){
   '<div class="acts">'+(isNew?'':'<button type="button" class="btn bad" data-act="del">Delete</button>')+'<button type="button" class="btn" data-act="close">Cancel</button><button type="submit" class="btn pri">Save</button></div></form>';
 }
 
+/* ---------- paycheck tab ---------- */
+function parseStub(text){
+  var t=text.replace(/\s+/g,' ');var o={};var m;
+  m=t.match(/NET PAY:?\s*\$?\s*([\d,]+\.\d{2})/i)||t.match(/Net Pay\s*\$?\s*([\d,]+\.\d{2})/i);if(m)o.net=parseFloat(m[1].replace(/,/g,''));
+  m=t.match(/Total Hours:?\s*([\d.]+)/i);if(m)o.hours=parseFloat(m[1]);
+  m=t.match(/Pay Date:?\s*(\d{4}-\d{2}-\d{2})/i);if(m)o.date=m[1];
+  o.bonus=/\bBONUS\b/i.test(t);
+  return o;
+}
+function loadPdfJs(){
+  return new Promise(function(res,rej){
+    if(window.pdfjsLib)return res(window.pdfjsLib);
+    var s=document.createElement('script');s.src='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+    s.onload=function(){window.pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';res(window.pdfjsLib);};
+    s.onerror=function(){rej(new Error('load'));};document.head.appendChild(s);
+  });
+}
+function readStubFile(file){
+  S.chk.msg='Reading your stub...';render();
+  var fr=new FileReader();
+  fr.onerror=function(){S.chk.msg='Could not open that file.';render();};
+  fr.onload=function(){
+    loadPdfJs().then(function(lib){return lib.getDocument({data:new Uint8Array(fr.result)}).promise;}).then(function(doc){
+      var jobs=[];for(var i=1;i<=doc.numPages;i++)jobs.push(doc.getPage(i).then(function(pg){return pg.getTextContent();}).then(function(c){return c.items.map(function(x){return x.str;}).join(' ');}));
+      return Promise.all(jobs);
+    }).then(function(parts){
+      var o=parseStub(parts.join(' '));
+      if(!(o.net>0)){S.chk.msg='I could not find the net pay in that file. Type it in below.';render();return;}
+      var ds=checkDates();var d=(o.date&&ds.indexOf(o.date)>-1)?o.date:S.chk.date;
+      var st=S.settings,entry={net:o.net,hours:o.hours||null,living:null,bonusNet:null,incBonus:false,src:'stub'};
+      var msg='Read your stub: net pay '+money(o.net)+(o.hours?', '+o.hours+' hours':'')+(o.date?', paid '+o.date:'')+'.';
+      if(o.bonus){
+        var reg=r2(st.takeHome*(o.hours?o.hours/88:1));
+        entry.net=reg;entry.bonusNet=r2(o.net-reg);
+        msg+=' It includes a bonus, so I am planning with your regular take-home of '+money(reg)+'. Edit the net pay below if you know the exact regular amount.';
+      }
+      if(o.date&&ds.indexOf(o.date)<0)msg+=' That pay date is not one of your upcoming checks, so it was applied to '+d+'.';
+      S.chk.date=d;S.chk.msg=msg;
+      var upd={};upd[d]=entry;wUpd('checks',{map:upd});render();
+    }).catch(function(){S.chk.msg='Could not read the PDF here (it needs internet the first time). Type the net pay in below.';render();});
+  };
+  fr.readAsArrayBuffer(file);
+}
+function checkDates(){return genPaydays(S.settings.asOf,4).slice(0,6);}
+function simFor(A){return S.settings.strategy==='min'?A.min:A.plan;}
+function viewCheck(A){
+  var st=S.settings,ds=checkDates();
+  if(!S.chk.date||ds.indexOf(S.chk.date)<0)S.chk.date=ds[0];
+  var d=S.chk.date,cm=(S.docs.checks&&S.docs.checks.map)||{},sv=cm[d]||{};
+  var r=simFor(A).rows.filter(function(x){return x.date===d;})[0];
+  var v=function(x){return x==null?'':x;};
+  var h='<section class="card data-sec"><h2>Your paycheck</h2><p class="muted">Pick the pay date, then read your stub or type the net pay. The split below updates to the penny.</p>'+
+  '<label class="f">Pay date<select data-chk="date">'+ds.map(function(x){return '<option value="'+x+'"'+(x===d?' selected':'')+'>'+fLong(x)+(x===ds[0]?' (next)':'')+'</option>';}).join('')+'</select></label>'+
+  '<div class="row-btns"><label class="btn pri" for="file-stub" style="display:inline-block">Read my pay stub (PDF)</label><input type="file" id="file-stub" accept="application/pdf,.pdf" hidden></div>'+
+  (S.chk.msg?'<p class="small">'+esc(S.chk.msg)+'</p>':'')+
+  '<div class="grid2"><label class="f">Net pay (take-home)<input type="number" step="0.01" inputmode="decimal" data-chk="net" value="'+v(sv.net)+'" placeholder="'+st.takeHome+' (estimate)"></label>'+
+  '<label class="f">Living money this check<input type="number" step="0.01" inputmode="decimal" data-chk="living" value="'+v(sv.living)+'" placeholder="'+r2(st.living/2)+' (default)"></label></div>'+
+  (sv.bonusNet>0?'<label class="chk"><input type="checkbox" data-chk="incBonus"'+(sv.incBonus?' checked':'')+'>Also put the '+money(sv.bonusNet)+' bonus take-home toward debt</label>':'')+
+  '<p class="xs muted">Leave net pay empty to use your estimated regular take-home of '+money(st.takeHome)+'. The bonus is never counted unless you tick the box.</p></section>';
+  if(!r){return h+'<div class="card">No plan found for that date.</div>';}
+  var net=r.income;
+  h+='<section class="card data-sec"><h2>Where every dollar goes</h2><p class="muted">Check of '+fLong(d)+' · '+money(net)+(sv.net!=null?' from your entry':' estimated')+(r.lump>0?' + '+money(r.lump)+' bonus':'')+'</p>';
+  h+='<div class="al"><b>1. Bills and minimums</b><b class="num">'+money(r.billsTotal)+'</b></div>';
+  r.items.forEach(function(it){h+='<div class="al"><span>'+esc(it.name)+'<small>'+(it.autopay?'Autopay '+fShort(it.due)+', keep it in the account':'Due '+fShort(it.due)+' · pay by '+fShort(it.payBy))+(it.kind==='debt'?' · minimum':'')+'</small></span><span class="num">'+money(it.amount)+'</span></div>';});
+  if(!r.items.length)h+='<div class="al"><span class="muted">Nothing due before the next check</span><span></span></div>';
+  h+='<div class="al"><b>2. Living money</b><b class="num">'+money(r.living)+'</b></div>';
+  h+='<div class="al"><b>3. Extra toward debt</b><b class="num">'+money(r.extraTotal)+'</b></div>';
+  var dm={};S.debts.forEach(function(x){dm[x.id]=x;});
+  r.extras.forEach(function(e){var x=dm[e.debtId]||{};h+='<div class="al"><span>Send to '+esc(e.name)+'<small>'+(x.apr?x.apr+'% APR'+(x.aprKnown?'':' (estimated)'):'')+' · balance '+money(x.balance||0)+'</small></span><span class="num">'+money(e.amount)+'</span></div>';});
+  if(!r.extras.length&&st.strategy!=='min')h+='<div class="al"><span class="muted">Nothing left for extra payments</span><span></span></div>';
+  if(st.strategy==='min')h+='<div class="al"><span class="muted">Strategy is minimums only</span><span></span></div>';
+  h+='<div class="al"><b>'+(r.short>0?'Short by':'Left over')+'</b><b class="num" style="color:var(--'+(r.short>0?'bad':'ink')+')">'+money(r.short>0?r.short:r.left)+'</b></div>';
+  var sum=r2(r.billsTotal+r.living+r.extraTotal+(r.short>0?0:r.left));
+  h+='<div class="al tot"><span>Total (matches '+money(r2(net+r.lump))+')</span><span class="num">'+money(sum)+'</span></div>';
+  if(r.short>0)h+='<p class="small" style="color:var(--bad)">This check does not cover everything. Lower the living money, or move a bill to a later check in the Bills tab.</p>';
+  if(d===ds[0])h+='<div class="row-btns"><button class="btn pri" data-act="apply-check">I paid all of this: update my balances</button></div><p class="xs muted">Marks these items paid, lowers each debt by what you sent, adds about half a month of interest, and moves the plan to your next check.</p>';
+  else h+='<p class="xs muted">Apply the earlier check first. Then this one becomes the next check.</p>';
+  h+='</section>';
+  h+='<section class="card data-sec"><h2>Update from your statements</h2><p class="muted">Type the exact balance and APR from each statement. Accurate numbers make the split accurate. Items marked estimated are my guesses.</p>';
+  S.debts.forEach(function(x){h+='<div class="grid2"><label class="f">'+esc(x.name)+' balance<input type="number" step="0.01" inputmode="decimal" data-bal="'+esc(x.id)+'" value="'+x.balance+'"></label><label class="f">APR %'+(x.aprKnown?'':' (estimated)')+'<input type="number" step="0.01" inputmode="decimal" data-aprf="'+esc(x.id)+'" value="'+x.apr+'"></label></div>';});
+  h+='<p class="xs muted">Balances last set '+fShort(st.asOf)+'.</p></section>';
+  return h;
+}
+function applyCheck(){
+  var A=scenarios(),r=simFor(A).rows.filter(function(x){return x.date===S.chk.date;})[0];
+  if(!r)return;
+  if(!confirm('Mark this whole check as paid and update your balances?'))return;
+  var debts=clone(S.debts),find=function(id){return debts.filter(function(x){return x.id===id;})[0];};
+  r.items.forEach(function(it){if(it.debtId){var x=find(it.debtId);if(x)x.balance=r2(Math.max(0,x.balance-it.amount));}});
+  r.extras.forEach(function(e){var x=find(e.debtId);if(x)x.balance=r2(Math.max(0,x.balance-e.amount));});
+  debts.forEach(function(x){x.balance=x.balance>0.005?r2(x.balance*(1+x.apr/2400)):0;});
+  var pm={};r.items.forEach(function(it){pm[it.key]=TODAY;});r.extras.forEach(function(e){pm[e.key]=TODAY;});
+  var log=clone((S.docs.log&&S.docs.log.items)||[]);
+  log.push({date:r.date,net:r.income,bills:r.billsTotal,living:r.living,extra:r.extraTotal,left:r.left,at:TODAY});
+  wSet('debts',{items:debts});wUpd('paid',{map:pm});wSet('log',{items:log});
+  wUpd('settings',{asOf:addDays(r.date,1)});
+  S.chk.date=null;S.chk.msg='';render();window.scrollTo(0,0);
+  toast('Done. Balances updated. Your next check is ready.');
+}
+$('#app').addEventListener('change',function(e){
+  var t=e.target;
+  if(t.id==='file-stub'&&t.files&&t.files[0]){readStubFile(t.files[0]);t.value='';return;}
+  if(t.dataset.chk){
+    var f=t.dataset.chk;
+    if(f==='date'){S.chk.date=t.value;S.chk.msg='';render();return;}
+    var cm=(S.docs.checks&&S.docs.checks.map)||{},cur=Object.assign({},cm[S.chk.date]||{});
+    if(f==='incBonus')cur.incBonus=t.checked;else{var s=String(t.value).trim();cur[f]=s===''?null:num(s,null);}
+    var o={};o[S.chk.date]=cur;wUpd('checks',{map:o});render();return;
+  }
+  if(t.dataset.bal||t.dataset.aprf){
+    var id=t.dataset.bal||t.dataset.aprf,items=clone(S.debts),x=items.filter(function(q){return q.id===id;})[0];if(!x)return;
+    if(t.dataset.bal)x.balance=Math.max(0,r2(num(t.value,x.balance)));else{x.apr=Math.max(0,num(t.value,x.apr));x.aprKnown=true;}
+    wSet('debts',{items:items});
+    if(t.dataset.bal&&TODAY>S.settings.asOf)wUpd('settings',{asOf:TODAY});
+    render();
+  }
+});
+$('#app').addEventListener('click',function(e){if(e.target.closest('[data-act="apply-check"]'))applyCheck();});
+
 function render(){
   var app=$('#app');
-  ['pay','debts','bills','data'].forEach(function(t){var el=$('#t-'+t);if(el)el.setAttribute('aria-selected',String(S.view===t));});
+  VIEWS.forEach(function(t){var el=$('#t-'+t);if(el)el.setAttribute('aria-selected',String(S.view===t));});
   if(S.view==='data'){$('#sub').textContent='';app.innerHTML=viewData();$('#layer').innerHTML='';return;}
   if(!hasData()){$('#sub').textContent='';app.innerHTML=welcomeHTML();return;}
   var A=scenarios();
   $('#sub').textContent=S.view==='pay'?'Paid '+Object.keys(S.paid).filter(function(k){return S.paid[k];}).length+' so far':'';
   var html='';
-  if(S.view==='debts')html=viewDebts(A);else if(S.view==='bills')html=viewBills();else html=viewPay(A);
+  if(S.view==='check')html=viewCheck(A);else if(S.view==='debts')html=viewDebts(A);else if(S.view==='bills')html=viewBills();else html=viewPay(A);
   app.innerHTML=html;
   $('#layer').innerHTML=S.editing?sheetHTML(S.editing):'';
   S.pending=false;S.mute=true;setTimeout(function(){S.mute=false;},80);
