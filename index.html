@@ -58,7 +58,7 @@ main{display:flex;flex-direction:column;gap:16px;padding-top:16px}
 .hero{display:flex;flex-direction:column;gap:14px}
 .eyebrow{font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink2);font-weight:600}
 .bigdate{font-family:var(--font-display);font-size:30px;font-weight:700;line-height:1.05;letter-spacing:-.02em}
-.stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(104px,1fr));gap:12px}
 .stat b{display:block;font-size:17px;font-weight:600}
 .stat span{font-size:12px;color:var(--ink2)}
 .muted{color:var(--ink2)}
@@ -507,7 +507,7 @@ function viewPay(A){
   if(next){
     var nextLeft=next.billsTotal;var nextEntry=((S.docs.checks&&S.docs.checks.map)||{})[next.date]||null;
     out+='<section class="card hero"><div><div class="eyebrow">Next payday</div><div class="bigdate">'+fLong(next.date)+'</div><div class="muted small">'+rel(next.date)+'</div></div>'+
-      '<div class="stats"><div class="stat"><b class="num">'+money(next.income)+'</b><span>'+(nextEntry&&nextEntry.net!=null?'Take-home (your entry)':'Estimated take-home')+'</span></div><div class="stat"><b class="num">'+money0(nextLeft)+'</b><span>Bills and minimums</span></div><div class="stat"><b class="num">'+money0(next.extraTotal)+'</b><span>Extra to debt</span></div>'+(next.held>0?'<div class="stat"><b class="num">'+money0(next.held)+'</b><span>Set aside</span></div>':'')+'</div>'+
+      '<div class="stats">'+(nextEntry&&nextEntry.stubNet?'<div class="stat"><b class="num">'+money(nextEntry.stubNet)+'</b><span>Net pay on your stub</span></div>':'')+'<div class="stat"><b class="num">'+money(next.income)+'</b><span>'+(nextEntry&&nextEntry.net!=null?(nextEntry.stubNet&&nextEntry.stubNet!==nextEntry.net?'Used in the plan':'Take-home (your entry)'):'Estimated take-home')+'</span></div><div class="stat"><b class="num">'+money0(nextLeft)+'</b><span>Bills and minimums</span></div><div class="stat"><b class="num">'+money0(next.extraTotal)+'</b><span>Extra to debt</span></div>'+(next.held>0?'<div class="stat"><b class="num">'+money0(next.held)+'</b><span>Set aside</span></div>':'')+'</div>'+
       (nextEntry&&nextEntry.stubNet?'<p class="small muted">Your pay stub shows a '+money(nextEntry.stubNet)+' deposit.'+(nextEntry.bonusNet>0?' It includes a '+money(nextEntry.bonusNet)+' bonus, which is '+(nextEntry.incBonus?'being put toward debt.':'not counted as regular pay.'):'')+'</p>':'')+'</section>';
   }
   if(att.length){
@@ -743,6 +743,11 @@ function viewCheck(A){
   '<p class="xs muted">Leave net pay empty to use your estimated regular take-home of '+money(st.takeHome)+'. The bonus is never counted unless you tick the box.</p></section>';
   if(!r){return h+'<div class="card">No plan found for that date.</div>';}
   var net=r.income;
+  var rowsAll=simFor(A).rows,ri=rowsAll.indexOf(r),nd=rowsAll[ri+1]?rowsAll[ri+1].date:null;
+  if(sv.stubNet>0){
+    h+='<section class="card data-sec" style="border-color:var(--accent)"><h2>Net pay from your stub</h2><div class="al tot" style="font-size:22px"><span>'+money(sv.stubNet)+'</span><span class="muted" style="font-size:13px;font-weight:400">paid '+fLong(d)+'</span></div>'+
+    (sv.net!=null&&Math.abs(sv.net-sv.stubNet)>0.005?'<p class="small">The plan below uses <b>'+money(sv.net)+'</b>'+(sv.bonusNet>0?' (your regular take-home). The other <b>'+money(sv.bonusNet)+'</b> is bonus money, '+(sv.incBonus?'and it is being put toward debt.':'kept out of the plan. Tick the box above to put it toward debt.'):'.')+'</p>':'<p class="small">The whole amount is divided below.</p>')+'</section>';
+  }
   var pool=r2(r.extraTotal-(r.promo||0)+(r.held||0)+r.left);
   var reqd=(+sv.savings||0)+(+sv.cash||0)+(+sv.other||0);
   var logs=(S.docs.log&&S.docs.log.items)||[];var tot={savings:0,cash:0,other:0};
@@ -755,6 +760,7 @@ function viewCheck(A){
   (reqd>r.held+0.005?'<p class="small" style="color:var(--warn)">Only '+money(r.held)+' of your '+money(r2(reqd))+' fits this check, so the rest was cut.</p>':'')+
   ((tot.savings+tot.cash+tot.other)>0?'<p class="xs muted">Set aside on earlier checks: savings '+money(tot.savings)+', cash '+money(tot.cash)+', other '+money(tot.other)+'.</p>':'')+'</section>';
   h+='<section class="card data-sec"><h2>Where every dollar goes</h2><p class="muted">Check of '+fLong(d)+' · '+money(net)+(sv.net!=null?' from your entry':' estimated')+(r.lump>0?' + '+money(r.lump)+' bonus':'')+'</p>';
+  h+='<p class="xs muted">This covers everything to pay from '+fShort(d)+(nd?' until your next payday on '+fShort(nd):'')+'.</p>';
   h+='<p class="small"><b>Summary:</b> pay '+money(r.billsTotal)+' in bills and minimums'+(r.held>0?', set aside '+money(r.held):'')+', send '+money(r.extraTotal)+' extra to debt, and you keep '+money(r2(r.living+(r.short>0?0:r.left)))+' ('+money(r.living)+' living'+(r.left>0.005&&!(r.short>0)?' + '+money(r.left)+' left over':'')+').</p>';
   h+='<div class="al"><b>1. Bills and minimums</b><b class="num">'+money(r.billsTotal)+'</b></div>';
   r.items.forEach(function(it){h+='<div class="al"><span>'+esc(it.name)+'<small>'+(it.autopay?'Autopay '+fShort(it.due)+', keep it in the account':'Due '+fShort(it.due)+' · pay by '+fShort(it.payBy))+(it.kind==='debt'?' · minimum':'')+'</small></span><span class="num">'+money(it.amount)+'</span></div>';});
