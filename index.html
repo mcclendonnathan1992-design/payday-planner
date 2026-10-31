@@ -155,6 +155,7 @@ button{font-family:inherit;color:inherit;cursor:pointer}
 .row-btns{display:flex;gap:8px;flex-wrap:wrap}
 code{background:var(--surface2);padding:1px 5px;border-radius:5px;font-size:13px;word-break:break-all}
 textarea.paste{width:100%;min-height:90px;font-size:13px;font-family:ui-monospace,monospace;background:var(--surface);border:1px solid var(--line);border-radius:9px;color:var(--ink);padding:9px}
+.mvbtn{border:1px solid var(--accent);background:none;color:var(--accent);cursor:pointer;font-family:inherit}.optb{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;width:100%;text-align:left;margin-bottom:8px;flex-wrap:wrap}.optb small{display:block;font-weight:400;color:var(--ink2);font-size:12px}.optb.cur{border-color:var(--accent);background:var(--accent-soft)}
 .al{display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid var(--line)}.al small{display:block;color:var(--ink2);font-size:12px;font-weight:400}.al.tot{border-bottom:0;font-weight:700}.data-sec .f{display:flex;flex-direction:column;gap:4px;font-size:13px}
 </style>
 
@@ -249,6 +250,8 @@ function simulate(cfg){
     i.payBy=i.due<cfg.asOf?paydays[0]:prevBiz(base);
     var f=0;for(var k=0;k<paydays.length;k++){if(paydays[k]<=i.payBy)f=k;else break;}
     i.fund=f;
+    var mv=cfg.moves&&cfg.moves[i.key];
+    if(mv){var mi=paydays.indexOf(mv);if(mi>-1&&mi!==f){i.origDate=paydays[f];i.fund=mi;i.moved=true;}}
   });
   var by=paydays.map(function(){return [];});
   inst.forEach(function(i){by[i.fund].push(i);});
@@ -349,7 +352,7 @@ function migrate(){
 function adopt(p){
   var docs=p&&p.docs;
   if(!docs||!docs.settings||!docs.debts||!docs.bills)return false;
-  S.docs={settings:docs.settings,debts:docs.debts,bills:docs.bills,paid:docs.paid||{map:{}},checks:docs.checks||{map:{}},log:docs.log||{items:[]}};
+  S.docs={settings:docs.settings,debts:docs.debts,bills:docs.bills,paid:docs.paid||{map:{}},checks:docs.checks||{map:{}},log:docs.log||{items:[]},moves:docs.moves||{map:{}}};
   migrate();updatedAt=+p.updatedAt||Date.now();recompute();return true;
 }
 function saveLocal(){if(!lsSet(LS_DATA,JSON.stringify(payload())))toast('Could not save on this device. Export a backup from the Data tab.');}
@@ -358,7 +361,7 @@ function commit(){updatedAt=Date.now();saveLocal();if(sync.token&&sync.gistId){c
 function wSet(key,data){S.docs[key]=data;recompute();commit();}
 function wUpd(key,data){
   var cur=S.docs[key]||{};
-  if(key==='paid'||key==='checks'){var m=Object.assign({},cur.map||{},data.map||{});S.docs[key]={map:m};}
+  if(key==='paid'||key==='checks'||key==='moves'){var m=Object.assign({},cur.map||{},data.map||{});S.docs[key]={map:m};}
   else S.docs[key]=Object.assign({},cur,data);
   recompute();commit();
 }
@@ -406,7 +409,7 @@ function boot(){
 
 /* ---------- onboarding / data tab ---------- */
 function blankData(){
-  return {settings:{takeHome:5000,living:3000,buffer:2,strategy:'avalanche',bonusAmount:0,useBonus:false,asOf:TODAY,stubNet:0,stubDate:''},debts:{items:[]},bills:{items:[]},paid:{map:{}},checks:{map:{}},log:{items:[]}};
+  return {settings:{takeHome:5000,living:3000,buffer:2,strategy:'avalanche',bonusAmount:0,useBonus:false,asOf:TODAY,stubNet:0,stubDate:''},debts:{items:[]},bills:{items:[]},paid:{map:{}},checks:{map:{}},log:{items:[]},moves:{map:{}}};
 }
 function importControls(){
   return '<div class="row-btns"><label class="btn pri" for="file-import" style="display:inline-block">Choose data file</label><input type="file" id="file-import" accept=".json,application/json" hidden></div>'+
@@ -434,6 +437,7 @@ function importText(txt){
   var prevDocs=S.docs;
   if(!adopt(p)){toast('That file is missing bills or debts.');return;}
   try{var pc=(prevDocs.checks&&prevDocs.checks.map)||{},nc=S.docs.checks.map;Object.keys(pc).forEach(function(k){if(!nc[k])nc[k]=pc[k];});
+  var pmv=(prevDocs.moves&&prevDocs.moves.map)||{},nmv=S.docs.moves.map;Object.keys(pmv).forEach(function(k){if(!(k in nmv))nmv[k]=pmv[k];});
   var pl=(prevDocs.log&&prevDocs.log.items)||[],nl=S.docs.log.items,have={};nl.forEach(function(l){have[l.date]=1;});pl.forEach(function(l){if(!have[l.date])nl.push(l);});}catch(e){}
   commit();S.view='pay';location.hash='pay';render();toast('Data imported.');
 }
@@ -468,7 +472,7 @@ function cfgBase(){
   var st=S.settings;
   var netBy={},livBy={},bonusBy={},holdBy={};var cm=(S.docs.checks&&S.docs.checks.map)||{};
   Object.keys(cm).forEach(function(k){var c=cm[k];if(!c)return;if(c.net!=null)netBy[k]=c.net;if(c.living!=null)livBy[k]=c.living;if(c.incBonus&&c.bonusNet>0)bonusBy[k]=c.bonusNet;var hs=(+c.savings||0)+(+c.cash||0)+(+c.other||0);if(hs>0)holdBy[k]=r2(hs);});
-  return {bills:S.bills,debts:S.debts,asOf:st.asOf,months:120,buffer:st.buffer,takeHome:st.takeHome,living:st.living,paid:S.paid,netBy:netBy,livBy:livBy,bonusBy:bonusBy,holdBy:holdBy};
+  return {bills:S.bills,debts:S.debts,asOf:st.asOf,months:120,buffer:st.buffer,takeHome:st.takeHome,living:st.living,paid:S.paid,netBy:netBy,livBy:livBy,bonusBy:bonusBy,holdBy:holdBy,moves:((S.docs.moves&&S.docs.moves.map)||{})};
 }
 function scenarios(){
   var b=cfgBase(),st=S.settings;
@@ -493,6 +497,8 @@ function rowHTML(it){
   else if(!p&&!it.autopay&&it.payBy<=TODAY)tags+='<span class="pill warn">Pay today</span>';
   if(it.autopay)tags+='<span class="pill acc">Autopay</span>';
   if(it.kind==='debt')tags+='<span class="pill">Minimum</span>';
+  if(it.moved)tags+='<span class="pill acc">Moved from '+fShort(it.origDate)+' check</span>';
+  if(!p)tags+='<button type="button" class="pill mvbtn" data-move="'+esc(it.key)+'">Move</button>';
   return '<label class="row'+(p?' done':'')+'"><input type="checkbox" data-paid="'+esc(it.key)+'"'+(p?' checked':'')+'><div><div class="nm">'+esc(it.name)+'</div><div class="sb">'+esc(sub)+'</div>'+(it.note&&!p?'<div class="sb">'+esc(it.note)+'</div>':'')+(tags?'<div class="tagline">'+tags+'</div>':'')+'</div><div class="am num">'+money(it.amount)+'</div></label>';
 }
 function allOf(r){
@@ -761,7 +767,7 @@ function viewCheck(A){
   h+='<p class="xs muted">This covers everything to pay from '+fShort(d)+(nd?' until your next payday on '+fShort(nd):'')+'.</p>';
   h+='<p class="small"><b>Summary:</b> '+money(net)+' comes in. Pay '+money(r.billsTotal)+' in bills and minimums, which leaves '+money(r2(net+r.lump-r.billsTotal))+'. Of that'+(r.held>0?', '+money(r.held)+' is set aside':'')+', '+money(r.extraTotal)+' goes to extra debt payments, and you keep '+money(r2(r.living+(r.short>0?0:r.left)))+'.</p>';
   h+='<div class="al"><b>1. Bills and minimums</b><b class="num">'+money(r.billsTotal)+'</b></div>';
-  r.items.forEach(function(it){h+='<div class="al"><span>'+esc(it.name)+'<small>'+(it.autopay?'Autopay '+fShort(it.due)+', keep it in the account':'Due '+fShort(it.due)+' · pay by '+fShort(it.payBy))+(it.kind==='debt'?' · minimum':'')+'</small></span><span class="num">'+money(it.amount)+'</span></div>';});
+  r.items.forEach(function(it){h+='<div class="al"><span>'+esc(it.name)+'<small>'+(it.autopay?'Autopay '+fShort(it.due)+', keep it in the account':'Due '+fShort(it.due)+' · pay by '+fShort(it.payBy))+(it.kind==='debt'?' · minimum':'')+'</small>'+(it.moved?'<span class="pill acc">Moved here</span> ':'')+(S.paid[it.key]?'':'<button type="button" class="pill mvbtn" data-move="'+esc(it.key)+'">Move to another check</button>')+'</span><span class="num">'+money(it.amount)+'</span></div>';});
   if(!r.items.length)h+='<div class="al"><span class="muted">Nothing due before the next check</span><span></span></div>';
   h+='<div class="al tot" style="border-top:1px solid var(--line);border-bottom:1px solid var(--line)"><span>Remaining after bills</span><span class="num" style="color:var(--'+(r2(net+r.lump-r.billsTotal)<0?'bad':'good')+')">'+money(r2(net+r.lump-r.billsTotal))+'</span></div>';
   h+='<p class="xs muted" style="margin:6px 0 0">Here is what that remaining money does next:</p>';
@@ -839,6 +845,58 @@ $('#app').addEventListener('click',function(e){
   }
 });
 
+function findItem(key){
+  var A=scenarios(),rows=simFor(A).rows;
+  for(var a=0;a<rows.length;a++)for(var b=0;b<rows[a].items.length;b++)if(rows[a].items[b].key===key)return {it:rows[a].items[b],cur:rows[a].date};
+  return null;
+}
+function trialRows(key,dest){
+  var b=cfgBase(),st=S.settings,mv=Object.assign({},b.moves||{});
+  if(dest)mv[key]=dest;else delete mv[key];
+  return simulate(Object.assign({},b,{strategy:st.strategy==='min'?'min':st.strategy,bonus:0,moves:mv,months:6})).rows;
+}
+function leftOf(r){return r?r2(r.income+r.lump-r.billsTotal):0;}
+function moveHTML(){
+  var m=S.moving,A=scenarios(),rows=simFor(A).rows,st=S.settings;
+  var mvmap=(S.docs.moves&&S.docs.moves.map)||{};
+  var opts=rows.filter(function(r){return r.date>=st.asOf;}).slice(0,10);
+  var h='<div class="scrim" data-act="close"></div><div class="sheet" role="dialog" aria-modal="true" aria-label="Move bill"><h2>Move '+esc(m.it.name)+'</h2><p class="muted" style="margin:0">'+money(m.it.amount)+' · due '+fShort(m.it.due)+(m.it.autopay?' (autopay)':'')+'. Now paid from your '+fShort(m.cur)+' check. Pick the paycheck that should pay it.</p>';
+  opts.forEach(function(r){
+    var isCur=r.date===m.cur,sel=r.date===m.dest,late=r.date>m.it.due;
+    h+='<button type="button" class="btn optb'+(sel?' cur':'')+'" data-act="pick" data-date="'+r.date+'"><span><b>'+fLong(r.date)+'</b>'+(isCur?' · current':'')+'<small>'+(late?'After the '+fShort(m.it.due)+' due date, so it may be late':'Before the due date')+'</small></span><span style="text-align:right"><span class="num">'+money(leftOf(r))+'</span><small>left after bills now</small></span></button>';
+  });
+  if(m.dest&&m.dest!==m.cur){
+    var before=rows,after=trialRows(m.key,m.dest);
+    var g=function(rs,d){return rs.filter(function(x){return x.date===d;})[0];};
+    var s0=g(before,m.cur),s1=g(after,m.cur),d0=g(before,m.dest),d1=g(after,m.dest);
+    var line=function(lbl,a,b2){return '<div class="al"><span>'+lbl+'</span><span class="num">'+money(a)+' → <b'+(b2<0?' style="color:var(--bad)"':'')+'>'+money(b2)+'</b></span></div>';};
+    h+='<div class="card" style="padding:12px 14px"><b>If you move it</b>'+
+      '<p class="xs muted" style="margin:6px 0 0">'+fLong(m.cur)+' check (where it leaves)</p>'+
+      line('Left after bills',leftOf(s0),leftOf(s1))+line('Extra to debt',s0?s0.extraTotal:0,s1?s1.extraTotal:0)+
+      '<p class="xs muted" style="margin:10px 0 0">'+fLong(m.dest)+' check (where it lands)</p>'+
+      line('Left after bills',leftOf(d0),leftOf(d1))+line('Extra to debt',d0?d0.extraTotal:0,d1?d1.extraTotal:0)+
+      (d1&&d1.short>0?'<p class="small" style="color:var(--bad);margin:8px 0 0">That check would be short by '+money(d1.short)+'. Lower living money or move something else.</p>':'')+
+      (m.dest>m.it.due?'<p class="small" style="color:var(--bad);margin:8px 0 0">'+(m.it.autopay?'Autopay pulls on '+fShort(m.it.due)+', before this check arrives. Make sure the account has the money.':'This paycheck arrives after the '+fShort(m.it.due)+' due date. Pay it late or ask for a new due date.')+'</p>':'')+'</div>';
+  }
+  h+='<div class="acts">'+(mvmap[m.key]?'<button type="button" class="btn" data-act="unmove">Back to automatic</button>':'')+'<button type="button" class="btn" data-act="close">Cancel</button>'+(m.dest&&m.dest!==m.cur?'<button type="button" class="btn pri" data-act="moveto" data-date="'+m.dest+'">Move it here</button>':'')+'</div></div>';
+  return h;
+}
+$('#app').addEventListener('click',function(e){
+  var b=e.target.closest('[data-move]');if(!b)return;
+  e.preventDefault();e.stopPropagation();
+  var f=findItem(b.dataset.move);if(!f){toast('That bill is not in the current plan.');return;}
+  S.moving={key:b.dataset.move,it:f.it,cur:f.cur,dest:null};render();
+},true);
+$('#layer').addEventListener('click',function(e){
+  var a=e.target.closest('[data-act]');if(!a||!S.moving)return;
+  if(a.dataset.act==='pick'){S.moving.dest=a.dataset.date;render();}
+  else if(a.dataset.act==='moveto'){
+    var o={};o[S.moving.key]=a.dataset.date;var d=a.dataset.date,nm=S.moving.it.name;
+    S.moving=null;wUpd('moves',{map:o});render();toast(nm+' moved to your '+fShort(d)+' check.');
+  }else if(a.dataset.act==='unmove'){
+    var o2={};o2[S.moving.key]=null;S.moving=null;wUpd('moves',{map:o2});render();toast('Back to the automatic date.');
+  }
+});
 function render(){
   var app=$('#app');
   VIEWS.forEach(function(t){var el=$('#t-'+t);if(el)el.setAttribute('aria-selected',String(S.view===t));});
@@ -849,7 +907,7 @@ function render(){
   var html='';
   if(S.view==='check')html=viewCheck(A);else if(S.view==='debts')html=viewDebts(A);else if(S.view==='bills')html=viewBills();else html=viewPay(A);
   app.innerHTML=html;
-  $('#layer').innerHTML=S.editing?sheetHTML(S.editing):'';
+  $('#layer').innerHTML=S.editing?sheetHTML(S.editing):(S.moving?moveHTML():'');
   S.pending=false;S.mute=true;setTimeout(function(){S.mute=false;},80);
 }
 
@@ -901,7 +959,7 @@ $('#layer').addEventListener('change',function(e){
 });
 $('#layer').addEventListener('click',function(e){
   var a=e.target.closest('[data-act]');if(!a)return;
-  if(a.dataset.act==='close'){S.editing=null;render();}
+  if(a.dataset.act==='close'){S.editing=null;S.moving=null;render();}
   if(a.dataset.act==='del'){
     var items=S.bills.filter(function(b){return b.id!==S.editing.bill.id;});
     S.editing=null;S.docs.bills={items:items};recompute();render();wSet('bills',{items:items});
@@ -931,7 +989,7 @@ $('#layer').addEventListener('submit',function(e){
   if(idx>-1)items[idx]=b;else items.push(b);
   S.editing=null;S.docs.bills={items:items};recompute();render();wSet('bills',{items:items});
 });
-document.addEventListener('keydown',function(e){if(e.key==='Escape'&&S.editing){S.editing=null;render();}});
+document.addEventListener('keydown',function(e){if(e.key==='Escape'&&(S.editing||S.moving)){S.editing=null;S.moving=null;render();}});
 
 var h0=location.hash.slice(1);if(VIEWS.indexOf(h0)>-1)S.view=h0;
 boot();
