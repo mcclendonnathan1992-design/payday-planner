@@ -214,7 +214,8 @@ function debtBills(debts,asOf){
     var last=new Date(Date.UTC(y,m,0)).getUTCDate();
     var cand=y+'-'+pad(m)+'-'+pad(Math.min(d.dueDay,last));
     if(cand<asOf){m++;if(m>12){m=1;y++;}}
-    return {id:'debt-'+d.id,name:d.name,group:'Debt',amount:d.min,freq:'monthly',dueDay:d.dueDay,start:y+'-'+pad(m),autopay:!!d.autopay,debtId:d.id,active:true,note:d.note||''};
+    var st0=y+'-'+pad(m);if(d.firstDue&&st0<d.firstDue.slice(0,7))st0=d.firstDue.slice(0,7);
+    return {id:'debt-'+d.id,name:d.name,group:'Debt',amount:d.min,freq:'monthly',dueDay:d.dueDay,start:st0,autopay:!!d.autopay,debtId:d.id,active:true,note:d.note||''};
   });
 }
 function instancesFor(bills,asOf,months,paid){
