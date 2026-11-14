@@ -261,6 +261,8 @@ function simulate(cfg){
   var ids=Object.keys(D);var rows=[];var paidOff={};var interest=0;
   function total(){return ids.reduce(function(s,k){return s+Math.max(0,D[k].bal);},0);}
   var series=[{date:cfg.asOf,total:total()}];
+  var mstate={key:null};
+  function monthKey(dd){var y=+dd.slice(0,4),m=+dd.slice(5,7),d=+dd.slice(8,10);if(d>=25){m++;if(m>12){m=1;y++;}}return y*100+m;}
   for(var i=0;i<paydays.length;i++){
     if(i>0)ids.forEach(function(k){var d=D[k];if(d.bal>0.005){var x=r2(d.bal*(d.promo&&paydays[i]<d.promo?d.apr:d.aprAfter)/2400);d.bal=r2(d.bal+x);interest+=x;}});
     var items=[];var billsTotal=0;
@@ -271,37 +273,64 @@ function simulate(cfg){
     billsTotal=r2(billsTotal);var dt=paydays[i];
     var inc=(cfg.netBy&&cfg.netBy[dt]!=null)?cfg.netBy[dt]:cfg.takeHome;
     var liv=(cfg.livBy&&cfg.livBy[dt]!=null)?cfg.livBy[dt]:r2(cfg.living/2);
+    var plan=(cfg.plan&&cfg.plan.on)?cfg.plan:null;var alloc=[];var allocTotal=0;var rem=0;
+    if(plan)liv=0;
     var avail=r2(inc-billsTotal-liv);var lump=0;
     if(i===0&&cfg.bonus>0){avail=r2(avail+cfg.bonus);lump+=cfg.bonus;}
     if(cfg.bonusBy&&cfg.bonusBy[dt]>0){avail=r2(avail+cfg.bonusBy[dt]);lump+=cfg.bonusBy[dt];}
+    var capLeft=Infinity;
+    function payAlloc(key,name){var am=r2(Math.min(mstate.left[key],rem));if(am>0.005){alloc.push({key:key,name:name,amount:am});allocTotal=r2(allocTotal+am);mstate.left[key]=r2(mstate.left[key]-am);rem=r2(rem-am);avail=r2(avail-am);}}
+    if(plan){
+      var mk=monthKey(dt);
+      if(mstate.key!==mk){
+        var nextBills=0,nextInc=0;
+        if(i+1<paydays.length&&monthKey(paydays[i+1])===mk){
+          by[i+1].forEach(function(it){if(it.debtId){var dd=D[it.debtId];if(dd&&dd.bal>0.005)nextBills+=Math.min(dd.min,dd.bal);}else nextBills+=it.amount;});
+          nextInc=(cfg.netBy&&cfg.netBy[paydays[i+1]]!=null)?cfg.netBy[paydays[i+1]]:cfg.takeHome;
+        }
+        var rolledM=0;ids.forEach(function(k){if(D[k].bal<=0.005)rolledM+=D[k].min;});
+        var itemsM=(+plan.roth||0)+(+plan.legacy||0)+(+plan.wife||0)+(+plan.savings||0);
+        var debtB=r2((+plan.debtExtra||0)+rolledM);
+        var livM=Math.max(0,r2((inc+nextInc)-(billsTotal+nextBills)-itemsM-debtB));
+        mstate={key:mk,left:{roth:+plan.roth||0,legacy:+plan.legacy||0,wife:+plan.wife||0,savings:+plan.savings||0,debt:debtB},livLeft:livM,checksLeft:nextInc>0?2:1};
+      }
+      var livReserve=r2(mstate.livLeft/mstate.checksLeft);mstate.livLeft=r2(mstate.livLeft-livReserve);mstate.checksLeft=Math.max(1,mstate.checksLeft-1);
+      mstate.left.debt=r2(mstate.left.debt+lump);
+      rem=Math.max(0,r2(avail-livReserve));
+      payAlloc('roth','Roth IRA');payAlloc('legacy','Legacy investments');payAlloc('wife','Brittany');
+      capLeft=Math.max(0,Math.min(mstate.left.debt,rem));
+    }
     var extras=[];var extraTotal=0;var promoTotal=0;var held=0;
     function addExtra(k,amt){
       var ex=null;for(var z=0;z<extras.length;z++)if(extras[z].debtId===k)ex=extras[z];
       if(ex)ex.amount=r2(ex.amount+amt);else extras.push({key:'extra:'+k+'@'+paydays[i],debtId:k,name:D[k].name,amount:amt,date:paydays[i]});
-      D[k].bal=r2(D[k].bal-amt);avail=r2(avail-amt);extraTotal=r2(extraTotal+amt);
+      D[k].bal=r2(D[k].bal-amt);avail=r2(avail-amt);extraTotal=r2(extraTotal+amt);capLeft-=amt;
     }
     if(cfg.strategy!=='min'){
       ids.forEach(function(k){
-        var d=D[k];if(!d.promo||d.bal<=0.005||paydays[i]>=d.promo||avail<=0.005)return;
+        var d=D[k];if(!d.promo||d.bal<=0.005||paydays[i]>=d.promo||avail<=0.005||capLeft<=0.005)return;
         var left=0;for(var q=i;q<paydays.length&&paydays[q]<d.promo;q++)left++;
         var need=r2(d.bal/Math.max(1,left));var mp=0;
         items.forEach(function(it){if(it.debtId===k)mp=r2(mp+it.amount);});
-        var amt=r2(Math.min(Math.max(0,need-mp),avail,d.bal));
+        var amt=r2(Math.min(Math.max(0,need-mp),avail,d.bal,capLeft));
         if(amt>0.005){addExtra(k,amt);promoTotal=r2(promoTotal+amt);}
       });
     }
-    if(cfg.holdBy&&cfg.holdBy[dt]>0){held=r2(Math.min(cfg.holdBy[dt],Math.max(0,avail)));avail=r2(avail-held);}
+    if(!plan&&cfg.holdBy&&cfg.holdBy[dt]>0){held=r2(Math.min(cfg.holdBy[dt],Math.max(0,avail)));avail=r2(avail-held);}
     if(cfg.strategy!=='min'&&avail>0.005){
       var order=ids.filter(function(k){return D[k].bal>0.005;});
       order.sort(cfg.strategy==='snowball'?function(a,b){return D[a].bal-D[b].bal;}:function(a,b){var ra=(D[a].promo&&paydays[i]<D[a].promo)?D[a].apr:D[a].aprAfter,rb=(D[b].promo&&paydays[i]<D[b].promo)?D[b].apr:D[b].aprAfter;return (rb-ra)||(D[a].bal-D[b].bal);});
       for(var q=0;q<order.length;q++){
-        var k2=order[q];if(avail<=0.005)break;
-        var amt2=r2(Math.min(avail,D[k2].bal));if(amt2>0.005)addExtra(k2,amt2);
+        var k2=order[q];if(avail<=0.005||capLeft<=0.005)break;
+        var amt2=r2(Math.min(avail,D[k2].bal,capLeft));if(amt2>0.005)addExtra(k2,amt2);
       }
     }
     ids.forEach(function(k){if(D[k].bal<=0.005&&!paidOff[k]){paidOff[k]=paydays[i];D[k].bal=0;}});
+    if(plan){mstate.left.debt=r2(mstate.left.debt-extraTotal);rem=Math.max(0,r2(rem-extraTotal));payAlloc('savings','Savings');}
+    var shortAmt=avail<-0.005?-avail:0;
+    if(plan){liv=Math.max(0,avail);avail=shortAmt>0?-shortAmt:0;}
     series.push({date:paydays[i],total:total()});
-    rows.push({date:paydays[i],income:inc,items:items,billsTotal:billsTotal,living:liv,extras:extras,extraTotal:extraTotal,held:held,promo:promoTotal,left:Math.max(0,avail),short:avail<-0.005?-avail:0,lump:lump});
+    rows.push({date:paydays[i],income:inc,items:items,billsTotal:billsTotal,living:liv,alloc:alloc,allocTotal:allocTotal,extras:extras,extraTotal:extraTotal,held:held,promo:promoTotal,left:Math.max(0,avail),short:avail<-0.005?-avail:0,lump:lump});
   }
   var free=ids.length&&ids.every(function(k){return paidOff[k];})?ids.map(function(k){return paidOff[k];}).sort().pop():null;
   return {rows:rows,paidOff:paidOff,interest:interest,series:series,debtFree:free,paydays:paydays};
@@ -343,6 +372,7 @@ function hasData(){return !!(S.docs.settings&&S.docs.debts&&S.docs.bills);}
 function recompute(){
   var d=S.docs;
   S.settings=d.settings||null;S.debts=d.debts?d.debts.items:null;S.bills=d.bills?d.bills.items:null;S.paid=(d.paid&&d.paid.map)||{};
+  if(S.settings&&!S.settings.plan)S.settings.plan={on:true,roth:600,legacy:600,wife:1500,savings:1500,debtExtra:1500};
   S.ready=true;
 }
 function payload(){return {v:1,updatedAt:updatedAt,docs:S.docs};}
@@ -473,7 +503,7 @@ function cfgBase(){
   var st=S.settings;
   var netBy={},livBy={},bonusBy={},holdBy={};var cm=(S.docs.checks&&S.docs.checks.map)||{};
   Object.keys(cm).forEach(function(k){var c=cm[k];if(!c)return;if(c.net!=null)netBy[k]=c.net;if(c.living!=null)livBy[k]=c.living;if(c.incBonus&&c.bonusNet>0)bonusBy[k]=c.bonusNet;var hs=(+c.savings||0)+(+c.cash||0)+(+c.other||0);if(hs>0)holdBy[k]=r2(hs);});
-  return {bills:S.bills,debts:S.debts,asOf:st.asOf,months:120,buffer:st.buffer,takeHome:st.takeHome,living:st.living,paid:S.paid,netBy:netBy,livBy:livBy,bonusBy:bonusBy,holdBy:holdBy,moves:((S.docs.moves&&S.docs.moves.map)||{})};
+  return {bills:S.bills,debts:S.debts,asOf:st.asOf,months:120,buffer:st.buffer,takeHome:st.takeHome,living:st.living,plan:st.plan,paid:S.paid,netBy:netBy,livBy:livBy,bonusBy:bonusBy,holdBy:holdBy,moves:((S.docs.moves&&S.docs.moves.map)||{})};
 }
 function scenarios(){
   var b=cfgBase(),st=S.settings;
@@ -518,7 +548,7 @@ function viewPay(A){
   if(next){
     var nextLeft=next.billsTotal;var nextEntry=((S.docs.checks&&S.docs.checks.map)||{})[next.date]||null;
     out+='<section class="card hero"><div><div class="eyebrow">Next payday</div><div class="bigdate">'+fLong(next.date)+'</div><div class="muted small">'+rel(next.date)+'</div></div>'+
-      '<div class="stats">'+'<div class="stat"><b class="num">'+money(next.income)+'</b><span>'+(nextEntry&&nextEntry.stubNet?'Net pay (your stub)':(nextEntry&&nextEntry.net!=null?'Net pay (your entry)':'Estimated net pay'))+'</span></div><div class="stat"><b class="num">'+money(nextLeft)+'</b><span>Bills and minimums</span></div><div class="stat"><b class="num">'+money(r2(next.income+next.lump-nextLeft))+'</b><span>Left after bills</span></div><div class="stat"><b class="num">'+money0(next.extraTotal)+'</b><span>Extra to debt</span></div>'+(next.held>0?'<div class="stat"><b class="num">'+money0(next.held)+'</b><span>Set aside</span></div>':'')+'</div>'+
+      '<div class="stats">'+'<div class="stat"><b class="num">'+money(next.income)+'</b><span>'+(nextEntry&&nextEntry.stubNet?'Net pay (your stub)':(nextEntry&&nextEntry.net!=null?'Net pay (your entry)':'Estimated net pay'))+'</span></div><div class="stat"><b class="num">'+money(nextLeft)+'</b><span>Bills and minimums</span></div><div class="stat"><b class="num">'+money(r2(next.income+next.lump-nextLeft))+'</b><span>Left after bills</span></div><div class="stat"><b class="num">'+money0(next.extraTotal)+'</b><span>Extra to debt</span></div>'+(next.alloc&&next.alloc.length?'<div class="stat"><b class="num">'+money0(next.allocTotal)+'</b><span>Set aside (Roth, investing, Brittany, savings)</span></div><div class="stat"><b class="num">'+money0(next.living)+'</b><span>Living money</span></div>':'')+(next.held>0?'<div class="stat"><b class="num">'+money0(next.held)+'</b><span>Set aside</span></div>':'')+'</div>'+
       (nextEntry&&nextEntry.stubNet?'<p class="small muted">Read from your pay stub. Open the Paycheck tab for the full breakdown.</p>':'')+'</section>';
   }
   if(att.length){
@@ -545,10 +575,10 @@ function viewByPaycheck(rows){
     tags+='<span class="pill">'+done+' of '+all.length+' paid</span>';
     var flow='<div><span>Regular take-home</span><span class="num">+'+money(r.income)+'</span></div>'+
       '<div><span>Bills and minimums</span><span class="num">-'+money(r.billsTotal)+'</span></div>'+
-      '<div><span>Living budget (half month)</span><span class="num">-'+money(r.living)+'</span></div>'+
+      (r.alloc&&r.alloc.length?r.alloc.map(function(a){return '<div><span>'+esc(a.name)+'</span><span class="num">-'+money(a.amount)+'</span></div>';}).join(''):'<div><span>Living budget (half month)</span><span class="num">-'+money(r.living)+'</span></div>')+
       (r.lump>0?'<div><span>Bonus put toward debt</span><span class="num">+'+money(r.lump)+'</span></div>':'')+
       (r.held>0?'<div><span>Set aside (savings/cash)</span><span class="num">-'+money(r.held)+'</span></div>':'')+'<div><span>Extra toward debt</span><span class="num">-'+money(r.extraTotal)+'</span></div>'+
-      '<div class="tot"><span>'+(r.short>0?'Short by':'Left over')+'</span><span class="num" style="color:var(--'+(r.short>0?'bad':'ink')+')">'+money(r.short>0?r.short:r.left)+'</span></div>';
+      (r.alloc&&r.alloc.length?'<div class="tot"><span>'+(r.short>0?'Short by':'Living money (what is left)')+'</span><span class="num" style="color:var(--'+(r.short>0?'bad':'ink')+')">'+money(r.short>0?r.short:r.living)+'</span></div>':'<div class="tot"><span>'+(r.short>0?'Short by':'Left over')+'</span><span class="num" style="color:var(--'+(r.short>0?'bad':'ink')+')">'+money(r.short>0?r.short:r.left)+'</span></div>');
     return '<details class="pc" data-date="'+r.date+'"'+(open?' open':'')+'><summary><div class="pc-head"><div><div class="pc-date">Payday '+fLong(r.date)+'</div><div class="xs muted">'+rel(r.date)+'</div></div><div style="display:flex;gap:10px;align-items:flex-start"><div class="pc-tags">'+tags+'</div><span class="chev"></span></div></div><div class="meter" aria-hidden="true"><i style="width:'+pct+'%"></i></div></summary><div class="flow">'+flow+'</div><div class="list">'+all.map(rowHTML).join('')+'</div></details>';
   }).join('');
 }
@@ -609,9 +639,17 @@ function viewDebts(A){
     '</tbody></table></div>'+chart(A)+'<div class="legend"><span><i style="color:var(--ink2);border-top-style:dashed"></i>Minimums only</span><span><i style="color:var(--accent)"></i>Extra from paychecks</span><span><i style="color:var(--good)"></i>Plus bonus</span></div>'+
     '<p class="xs muted" style="margin-top:8px">Estimates. Interest uses the APRs below. Cards that are paid off stop needing a minimum, so your schedule gets lighter over time. Stop adding new charges to the cards or the totals will not hold.</p></section>';
   out+='<section class="card" style="display:flex;flex-direction:column;gap:12px"><h2>How extra money is aimed</h2><div class="seg" role="group" aria-label="Strategy"><button data-strategy="avalanche" aria-pressed="'+(st.strategy==='avalanche')+'">Avalanche</button><button data-strategy="snowball" aria-pressed="'+(st.strategy==='snowball')+'">Snowball</button><button data-strategy="min" aria-pressed="'+(st.strategy==='min')+'">Minimums only</button></div><p class="small muted">'+(st.strategy==='snowball'?'Snowball sends extra money to the smallest balance first. You clear accounts sooner, and it can cost slightly more interest.':st.strategy==='min'?'Only the minimums are scheduled. Leftover cash stays in your account.':'Avalanche sends extra money to the highest APR first, which usually costs the least interest.')+'</p></section>';
+  var pl=st.plan||{};var plTotal=(+pl.roth||0)+(+pl.legacy||0)+(+pl.wife||0)+(+pl.savings||0)+(+pl.debtExtra||0);
+  out+='<section class="card" style="display:flex;flex-direction:column;gap:12px"><h2>Your monthly plan</h2><p class="small muted">Split evenly across your two checks. Paid off debts roll their minimum into the extra debt payment. Living money is whatever is left.</p><label class="chk"><input type="checkbox" data-toggleplan="on"'+(pl.on?' checked':'')+'>Use my plan</label><div class="grid2">'+
+    '<label class="f">Roth IRA per month<input type="number" step="1" inputmode="decimal" data-plan="roth" value="'+(pl.roth||0)+'"></label>'+
+    '<label class="f">Legacy investments per month<input type="number" step="1" inputmode="decimal" data-plan="legacy" value="'+(pl.legacy||0)+'"></label>'+
+    '<label class="f">Brittany per month<input type="number" step="1" inputmode="decimal" data-plan="wife" value="'+(pl.wife||0)+'"></label>'+
+    '<label class="f">Savings per month<input type="number" step="1" inputmode="decimal" data-plan="savings" value="'+(pl.savings||0)+'"></label>'+
+    '<label class="f">Extra to debt per month<input type="number" step="1" inputmode="decimal" data-plan="debtExtra" value="'+(pl.debtExtra||0)+'"></label>'+
+    '</div><p class="small muted">Plan total '+money(plTotal)+' a month, '+money(r2(plTotal/2))+' per check.</p></section>';
   out+='<section class="card" style="display:flex;flex-direction:column;gap:12px"><h2>Your numbers</h2><div class="grid2">'+
     '<label class="f">Regular take-home per paycheck<input type="number" step="0.01" inputmode="decimal" data-set="takeHome" value="'+st.takeHome+'"><span class="hint">Your stub nets '+money(st.stubNet)+' with the bonus. This figure scales your Oct 15 stub to a full 88-hour check, with no bonus and your normal benefit deductions.</span></label>'+
-    '<label class="f">Living costs per month<input type="number" step="1" inputmode="decimal" data-set="living" value="'+st.living+'"><span class="hint">Groceries, gas, phone, subscriptions, tolls. None of these were in your screenshots, so adjust it.</span></label>'+
+    '<label class="f">Living costs per month<input type="number" step="1" inputmode="decimal" data-set="living" value="'+st.living+'"><span class="hint">'+(pl.on?'Not used while your plan is on. Living money is what is left after bills, your plan and your extra debt payment. ':'')+'Groceries, gas, phone, subscriptions, tolls. None of these were in your screenshots, so adjust it.</span></label>'+
     '<label class="f">Bonus to put toward debt (net)<input type="number" step="1" inputmode="decimal" data-set="bonusAmount" value="'+(st.bonusAmount||0)+'"><span class="hint">Estimated take-home from the $10,000. Keep a cushion in checking first.</span></label>'+
     '<label class="f">Pay this many days before due<input type="number" step="1" min="0" max="10" data-set="buffer" value="'+st.buffer+'"><span class="hint">Gives payments time to post.</span></label>'+
     '<label class="f">Balances as of<input type="date" data-set="asOf" value="'+st.asOf+'"><span class="hint">Change this when you refresh the balances below.</span></label>'+
@@ -734,7 +772,7 @@ function aprText(x){
 }
 function simFor(A){return S.settings.strategy==='min'?A.min:A.plan;}
 function viewCheck(A){
-  var st=S.settings,ds=checkDates();
+  var st=S.settings,ds=checkDates();var P=!!(st.plan&&st.plan.on);
   if(!S.chk.date||ds.indexOf(S.chk.date)<0)S.chk.date=ds[0];
   var d=S.chk.date,cm=(S.docs.checks&&S.docs.checks.map)||{},sv=cm[d]||{};
   var r=simFor(A).rows.filter(function(x){return x.date===d;})[0];
@@ -744,7 +782,7 @@ function viewCheck(A){
   '<div class="row-btns"><label class="btn pri" for="file-stub" style="display:inline-block">Add pay stub (PDF or photo)</label><input type="file" id="file-stub" accept="application/pdf,.pdf,image/*" multiple hidden></div>'+
   (S.chk.msg?'<p class="small" style="white-space:pre-line">'+esc(S.chk.msg)+'</p>':'')+
   '<div class="grid2"><label class="f">Net pay (take-home)<input type="number" step="0.01" inputmode="decimal" data-chk="net" value="'+v(sv.net)+'" placeholder="'+st.takeHome+' (estimate)"></label>'+
-  '<label class="f">Living money this check<input type="number" step="0.01" inputmode="decimal" data-chk="living" value="'+v(sv.living)+'" placeholder="'+r2(st.living/2)+' (default)"></label></div>'+
+  (P?'<div class="f"><span>Living money this check</span><span class="hint">Whatever is left after bills, your set-asides and your extra debt payment.</span></div>':'<label class="f">Living money this check<input type="number" step="0.01" inputmode="decimal" data-chk="living" value="'+v(sv.living)+'" placeholder="'+r2(st.living/2)+' (default)"></label>')+'</div>'+
   '<p class="xs muted">Leave net pay empty to use an estimate of '+money(st.takeHome)+' for a check with no stub. </p></section>';
   if(!r){return h+'<div class="card">No plan found for that date.</div>';}
   var net=r.income;
@@ -757,7 +795,7 @@ function viewCheck(A){
   var reqd=(+sv.savings||0)+(+sv.cash||0)+(+sv.other||0);
   var logs=(S.docs.log&&S.docs.log.items)||[];var tot={savings:0,cash:0,other:0};
   logs.forEach(function(l){if(l.hold){tot.savings+=l.hold.savings||0;tot.cash+=l.hold.cash||0;tot.other+=l.hold.other||0;}});
-  h+='<section class="card data-sec"><h2>Your extra money</h2><p class="muted">After bills, living money'+(r.promo>0?' and the no-interest payoff target':'')+', you have <b class="num">'+money(pool)+'</b> free. Choose how much to set aside. Whatever you do not set aside goes to debt.</p>'+
+  if(!P)h+='<section class="card data-sec"><h2>Your extra money</h2><p class="muted">After bills, living money'+(r.promo>0?' and the no-interest payoff target':'')+', you have <b class="num">'+money(pool)+'</b> free. Choose how much to set aside. Whatever you do not set aside goes to debt.</p>'+
   '<div class="row-btns"><button class="btn" data-act="preset" data-pct="0">All to debt</button><button class="btn" data-act="preset" data-pct="25">25% set aside</button><button class="btn" data-act="preset" data-pct="50">50% set aside</button></div>'+
   '<div class="grid2"><label class="f">Savings<input type="number" step="0.01" inputmode="decimal" data-chk="savings" value="'+v(sv.savings)+'" placeholder="0.00"></label><label class="f">Cash on hand<input type="number" step="0.01" inputmode="decimal" data-chk="cash" value="'+v(sv.cash)+'" placeholder="0.00"></label></div>'+
   '<div class="grid2"><label class="f">Other (name it)<input type="text" data-chk="otherLabel" value="'+esc(sv.otherLabel||'')+'" placeholder="Gas, gifts, trip..."></label><label class="f">Other amount<input type="number" step="0.01" inputmode="decimal" data-chk="other" value="'+v(sv.other)+'" placeholder="0.00"></label></div>'+
@@ -766,12 +804,25 @@ function viewCheck(A){
   ((tot.savings+tot.cash+tot.other)>0?'<p class="xs muted">Set aside on earlier checks: savings '+money(tot.savings)+', cash '+money(tot.cash)+', other '+money(tot.other)+'.</p>':'')+'</section>';
   h+='<section class="card data-sec"><h2>Where every dollar goes</h2><p class="muted">Check of '+fLong(d)+' · '+money(net)+(sv.net!=null?' from your entry':' estimated')+(r.lump>0?' + '+money(r.lump)+' bonus':'')+'</p>';
   h+='<p class="xs muted">This covers everything to pay from '+fShort(d)+(nd?' until your next payday on '+fShort(nd):'')+'.</p>';
-  h+='<p class="small"><b>Summary:</b> '+money(net)+' comes in. Pay '+money(r.billsTotal)+' in bills and minimums, which leaves '+money(r2(net+r.lump-r.billsTotal))+'. Of that'+(r.held>0?', '+money(r.held)+' is set aside':'')+', '+money(r.extraTotal)+' goes to extra debt payments, and you keep '+money(r2(r.living+(r.short>0?0:r.left)))+'.</p>';
+  if(P)h+='<p class="small"><b>Summary:</b> '+money(net)+' comes in. Pay '+money(r.billsTotal)+' in bills and minimums, set aside '+money(r.allocTotal)+', send '+money(r.extraTotal)+' extra to debt, and keep '+money(r.living)+' for living.</p>';
+  else h+='<p class="small"><b>Summary:</b> '+money(net)+' comes in. Pay '+money(r.billsTotal)+' in bills and minimums, which leaves '+money(r2(net+r.lump-r.billsTotal))+'. Of that'+(r.held>0?', '+money(r.held)+' is set aside':'')+', '+money(r.extraTotal)+' goes to extra debt payments, and you keep '+money(r2(r.living+(r.short>0?0:r.left)))+'.</p>';
   h+='<div class="al"><b>1. Bills and minimums</b><b class="num">'+money(r.billsTotal)+'</b></div>';
   r.items.forEach(function(it){h+='<div class="al"><span>'+esc(it.name)+'<small>'+(it.autopay?'Autopay '+fShort(it.due)+', keep it in the account':'Due '+fShort(it.due)+' · pay by '+fShort(it.payBy))+(it.kind==='debt'?' · minimum':'')+'</small>'+(it.moved?'<span class="pill acc">Moved here</span> ':'')+(S.paid[it.key]?'':'<button type="button" class="pill mvbtn" data-move="'+esc(it.key)+'">Move to another check</button>')+'</span><span class="num">'+money(it.amount)+'</span></div>';});
   if(!r.items.length)h+='<div class="al"><span class="muted">Nothing due before the next check</span><span></span></div>';
   h+='<div class="al tot" style="border-top:1px solid var(--line);border-bottom:1px solid var(--line)"><span>Remaining after bills</span><span class="num" style="color:var(--'+(r2(net+r.lump-r.billsTotal)<0?'bad':'good')+')">'+money(r2(net+r.lump-r.billsTotal))+'</span></div>';
   h+='<p class="xs muted" style="margin:6px 0 0">Here is what that remaining money does next:</p>';
+  if(P){
+    h+='<div class="al"><b>2. Your plan (set aside)</b><b class="num">'+money(r.allocTotal)+'</b></div>';
+    r.alloc.forEach(function(a){h+='<div class="al"><span>'+esc(a.name)+'</span><span class="num">'+money(a.amount)+'</span></div>';});
+    h+='<div class="al"><b>3. Extra toward debt</b><b class="num">'+money(r.extraTotal)+'</b></div>';
+    var dm0={};S.debts.forEach(function(x){dm0[x.id]=x;});
+    r.extras.forEach(function(e){var x=dm0[e.debtId]||{};h+='<div class="al"><span>Pay extra to '+esc(e.name)+'<small>'+aprText(x)+' · balance '+money(x.balance||0)+'</small></span><span class="num">'+money(e.amount)+'</span></div>';});
+    if(!r.extras.length&&st.strategy!=='min')h+='<div class="al"><span class="muted">No extra payments this check</span><span></span></div>';
+    if(st.strategy==='min')h+='<div class="al"><span class="muted">Strategy is minimums only</span><span></span></div>';
+    h+='<div class="al"><b>4. '+(r.short>0?'Short by':'Living money (what is left)')+'</b><b class="num" style="color:var(--'+(r.short>0?'bad':'ink')+')">'+money(r.short>0?r.short:r.living)+'</b></div>';
+    var sum0=r2(r.billsTotal+r.allocTotal+r.extraTotal+(r.short>0?0:r.living));
+    h+='<div class="al tot"><span>Total (matches '+money(r2(net+r.lump))+')</span><span class="num">'+money(sum0)+'</span></div>';
+  }else{
   h+='<div class="al"><b>2. Living money</b><b class="num">'+money(r.living)+'</b></div>';
   if(r.held>0){h+='<div class="al"><b>3. Set aside</b><b class="num">'+money(r.held)+'</b></div>';
     var hp=[['Savings',sv.savings],['Cash on hand',sv.cash],[sv.otherLabel||'Other',sv.other]];
@@ -785,7 +836,8 @@ function viewCheck(A){
   h+='<div class="al"><b>'+(r.short>0?'Short by':'Left over')+'</b><b class="num" style="color:var(--'+(r.short>0?'bad':'ink')+')">'+money(r.short>0?r.short:r.left)+'</b></div>';
   var sum=r2(r.billsTotal+r.living+(r.held||0)+r.extraTotal+(r.short>0?0:r.left));
   h+='<div class="al tot"><span>Total (matches '+money(r2(net+r.lump))+')</span><span class="num">'+money(sum)+'</span></div>';
-  if(r.short>0)h+='<p class="small" style="color:var(--bad)">This check does not cover everything. Lower the living money, or move a bill to a later check in the Bills tab.</p>';
+  }
+  if(r.short>0)h+='<p class="small" style="color:var(--bad)">This check does not cover everything. '+(P?'Lower one of your set-asides in the Debts tab, or':'Lower the living money, or')+' move a bill to a later check in the Bills tab.</p>';
   if(d===ds[0])h+='<div class="row-btns"><button class="btn pri" data-act="apply-check">I paid all of this: update my balances</button></div><p class="xs muted">Marks these items paid, lowers each debt by what you sent, adds about half a month of interest, and moves the plan to your next check.</p>';
   else h+='<p class="xs muted">Apply the earlier check first. Then this one becomes the next check.</p>';
   h+='</section>';
@@ -809,7 +861,7 @@ function applyCheck(){
   var pm={};r.items.forEach(function(it){pm[it.key]=TODAY;});r.extras.forEach(function(e){pm[e.key]=TODAY;});
   var log=clone((S.docs.log&&S.docs.log.items)||[]);
   var ck=((S.docs.checks&&S.docs.checks.map)||{})[r.date]||{};
-  log.push({date:r.date,net:r.income,bills:r.billsTotal,living:r.living,extra:r.extraTotal,left:r.left,held:r.held||0,hold:{savings:+ck.savings||0,cash:+ck.cash||0,other:+ck.other||0,label:ck.otherLabel||''},at:TODAY});
+  log.push({date:r.date,net:r.income,bills:r.billsTotal,living:r.living,alloc:r.allocTotal||0,extra:r.extraTotal,left:r.left,held:r.held||0,hold:{savings:+ck.savings||0,cash:+ck.cash||0,other:+ck.other||0,label:ck.otherLabel||''},at:TODAY});
   wSet('debts',{items:debts});wUpd('paid',{map:pm});wSet('log',{items:log});
   wUpd('settings',{asOf:addDays(r.date,1)});
   S.chk.date=null;S.chk.msg='';render();window.scrollTo(0,0);
@@ -943,6 +995,8 @@ $('#app').addEventListener('change',function(e){
     setSetting(f,v);return;
   }
   if(t.dataset.toggle){setSetting(t.dataset.toggle,t.checked);return;}
+  if(t.dataset.toggleplan){var pp0=Object.assign({},S.settings.plan||{});pp0.on=t.checked;setSetting('plan',pp0);return;}
+  if(t.dataset.plan){var pp1=Object.assign({},S.settings.plan||{});pp1[t.dataset.plan]=Math.max(0,num(t.value,pp1[t.dataset.plan]||0));setSetting('plan',pp1);return;}
   var card2=t.closest('[data-debt]');
   if(card2&&t.dataset.f){
     var items=clone(S.debts);var d=items.filter(function(x){return x.id===card2.dataset.debt;})[0];if(!d)return;
