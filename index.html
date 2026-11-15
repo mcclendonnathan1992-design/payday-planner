@@ -101,6 +101,7 @@ details[open]>summary .chev{transform:rotate(-135deg);margin-top:9px}
 .row.done .nm,.row.done .am{text-decoration:line-through;color:var(--ink2)}
 .row.done .sb{opacity:.7}
 .row.extra{background:var(--accent-soft)}
+.row.nobox{grid-template-columns:minmax(0,1fr) auto;cursor:default}
 .row.extra .nm{color:var(--accent)}
 .tagline{display:flex;gap:6px;flex-wrap:wrap;margin-top:3px}
 .dayhead{display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:6px 2px 0}
@@ -519,7 +520,7 @@ function scenarios(){
 function rowHTML(it){
   var p=!!S.paid[it.key];
   if(it.kind==='extra'){
-    return '<label class="row extra'+(p?' done':'')+'"><input type="checkbox" data-paid="'+esc(it.key)+'"'+(p?' checked':'')+'><div><div class="nm">Extra: '+esc(it.name)+'</div><div class="sb">Beyond the minimum. Send it on payday.</div></div><div class="am num">'+money(it.amount)+'</div></label>';
+    return '<div class="row extra nobox"><div><div class="nm">Extra: '+esc(it.name)+'</div><div class="sb">Beyond the minimum. Send it on payday.</div></div><div class="am num">'+money(it.amount)+'</div></div>';
   }
   var late=!p&&it.due<TODAY;
   var sub=it.autopay?'Autopay '+fShort(it.due)+' · keep funds in the account':'Due '+fShort(it.due)+' · pay by '+fShort(it.payBy);
@@ -560,10 +561,10 @@ function viewPay(A){
   return out;
 }
 function viewByPaycheck(rows){
-  var incomplete=rows.filter(function(r){return allOf(r).some(function(it){return !S.paid[it.key];});});
+  var incomplete=rows.filter(function(r){return r.items.some(function(it){return !S.paid[it.key];});});
   var defaults=incomplete.slice(0,2).map(function(r){return r.date;});
   return rows.map(function(r){
-    var all=allOf(r);var done=all.filter(function(it){return S.paid[it.key];}).length;
+    var all=r.items;var done=all.filter(function(it){return S.paid[it.key];}).length;
     var complete=all.length>0&&done===all.length;
     var open=S.userOpen.has(r.date)||(!S.userClosed.has(r.date)&&defaults.indexOf(r.date)>-1);
     var pct=all.length?Math.round(done/all.length*100):0;
@@ -579,7 +580,7 @@ function viewByPaycheck(rows){
       (r.lump>0?'<div><span>Bonus put toward debt</span><span class="num">+'+money(r.lump)+'</span></div>':'')+
       (r.held>0?'<div><span>Set aside (savings/cash)</span><span class="num">-'+money(r.held)+'</span></div>':'')+'<div><span>Extra toward debt</span><span class="num">-'+money(r.extraTotal)+'</span></div>'+
       (r.alloc&&r.alloc.length?'<div class="tot"><span>'+(r.short>0?'Short by':'Living money (what is left)')+'</span><span class="num" style="color:var(--'+(r.short>0?'bad':'ink')+')">'+money(r.short>0?r.short:r.living)+'</span></div>':'<div class="tot"><span>'+(r.short>0?'Short by':'Left over')+'</span><span class="num" style="color:var(--'+(r.short>0?'bad':'ink')+')">'+money(r.short>0?r.short:r.left)+'</span></div>');
-    return '<details class="pc" data-date="'+r.date+'"'+(open?' open':'')+'><summary><div class="pc-head"><div><div class="pc-date">Payday '+fLong(r.date)+'</div><div class="xs muted">'+rel(r.date)+'</div></div><div style="display:flex;gap:10px;align-items:flex-start"><div class="pc-tags">'+tags+'</div><span class="chev"></span></div></div><div class="meter" aria-hidden="true"><i style="width:'+pct+'%"></i></div></summary><div class="flow">'+flow+'</div><div class="list">'+all.map(rowHTML).join('')+'</div></details>';
+    return '<details class="pc" data-date="'+r.date+'"'+(open?' open':'')+'><summary><div class="pc-head"><div><div class="pc-date">Payday '+fLong(r.date)+'</div><div class="xs muted">'+rel(r.date)+'</div></div><div style="display:flex;gap:10px;align-items:flex-start"><div class="pc-tags">'+tags+'</div><span class="chev"></span></div></div><div class="meter" aria-hidden="true"><i style="width:'+pct+'%"></i></div></summary><div class="flow">'+flow+'</div><div class="list">'+allOf(r).map(rowHTML).join('')+'</div></details>';
   }).join('');
 }
 function viewByDate(rows){
@@ -593,7 +594,7 @@ function viewByDate(rows){
   dates=dates.filter(function(d){return d>=addDays(TODAY,-30);});
   return dates.map(function(d){
     var list=flat.filter(function(f){return f.date===d;});
-    var unpaid=list.filter(function(f){return !S.paid[f.it.key];}).length;
+    var unpaid=list.filter(function(f){return f.it.kind!=='extra'&&!S.paid[f.it.key];}).length;
     if(!list.length&&!pd[d])return '';
     return '<section class="card" style="padding:0;overflow:hidden"><div class="dayhead" style="padding:12px 16px 8px"><h3>'+fLong(d)+'</h3><span class="xs muted">'+(pd[d]?'<span class="pill acc">Payday</span> ':'')+rel(d)+'</span></div><div class="list">'+list.map(function(f){return rowHTML(f.it);}).join('')+'</div></section>';
   }).join('');
