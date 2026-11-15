@@ -343,7 +343,7 @@ if(typeof window==='undefined'){module.exports={simulate:simulate,genPaydays:gen
 var $=function(s){return document.querySelector(s);};
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];});}
 function money(n){return (n<0?'-':'')+'$'+Math.abs(n).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});}
-function money0(n){return '$'+Math.round(n).toLocaleString('en-US');}
+function money0(n){return (n<0?'-':'')+'$'+Math.abs(Math.round(n)).toLocaleString('en-US');}
 var _n=new Date();
 var TODAY=_n.getFullYear()+'-'+pad(_n.getMonth()+1)+'-'+pad(_n.getDate());
 function fmt(s,o){return parse(s).toLocaleDateString('en-US',Object.assign({timeZone:'UTC'},o));}
@@ -537,7 +537,47 @@ function allOf(r){
   var ex=r.extras.map(function(e){return {kind:'extra',key:e.key,name:e.name,amount:e.amount};});
   return r.items.concat(ex);
 }
+/* ---------- running balance ---------- */
+function balNow(){var b=S.settings.bal;if(!b)return null;var t=+b.amount||0;Object.keys(b.inc||{}).forEach(function(k){t+=b.inc[k];});Object.keys(b.out||{}).forEach(function(k){t-=b.out[k];});return r2(t);}
+function syncBalance(A){
+  var b=S.settings.bal;if(!b)return;
+  var inc=Object.assign({},b.inc||{}),ch=false;
+  simFor(A).rows.forEach(function(r){
+    if(r.date>b.date&&r.date<=TODAY&&inc[r.date]==null){inc[r.date]=r2(r.income+r.lump-(r.allocTotal||0)-(r.extraTotal||0)-(r.held||0));ch=true;}
+  });
+  if(ch)wUpd('settings',{bal:Object.assign({},b,{inc:inc})});
+}
+function weekly(A){
+  var start=balNow();if(start==null)return null;
+  var rows=simFor(A).rows,sun=addDays(TODAY,-dow(TODAY)),weeks=[];
+  for(var w=0;w<10;w++)weeks.push({start:addDays(sun,w*7),end:addDays(sun,w*7+6),inn:0,bills:0,plan:0,living:0});
+  function put(date,field,amt){for(var i=0;i<weeks.length;i++)if(date>=weeks[i].start&&date<=weeks[i].end){weeks[i][field]+=amt;return;}}
+  rows.forEach(function(r,ix){
+    if(r.date>TODAY){put(r.date,'inn',r.income+r.lump);put(r.date,'plan',(r.allocTotal||0)+r.extraTotal+(r.held||0));}
+    r.items.forEach(function(it){if(S.paid[it.key])return;var d=it.autopay?it.due:it.payBy;if(d<TODAY)d=TODAY;put(d,'bills',it.amount);});
+    var nx=rows[ix+1]?rows[ix+1].date:addDays(r.date,15),days=Math.max(1,daysBetween(r.date,nx)),per=r.living/days;
+    for(var k=0;k<days;k++){var dd=addDays(r.date,k);if(dd>TODAY)put(dd,'living',per);}
+  });
+  var bal=start;weeks.forEach(function(w){bal=r2(bal+w.inn-w.bills-w.plan-w.living);w.bal=bal;w.out=r2(w.bills+w.plan+w.living);});
+  return weeks;
+}
+function balHTML(A){
+  var b=S.settings.bal,cur=balNow();
+  var h='<section class="card" style="display:flex;flex-direction:column;gap:10px"><div class="eyebrow">Checking balance</div>';
+  if(cur==null)h+='<p class="small muted">Type what is in your checking account right now, after your paycheck posts. From then on it counts each paycheck when it arrives and drops only when you check off a bill as paid. Nothing is assumed paid.</p>';
+  else h+='<div class="bigdate num" style="color:var(--'+(cur<0?'bad':'ink')+')">'+money(cur)+'</div><p class="xs muted">Started at '+money(b.amount)+' on '+fShort(b.date)+'. Goes up when a paycheck arrives and down when you check off a bill.</p>';
+  h+='<div class="grid2"><label class="f">'+(cur==null?'Balance now':'Reset balance to')+'<input type="number" step="0.01" inputmode="decimal" id="bal-in" placeholder="0.00"></label><div style="align-self:end"><button type="button" class="btn pri" data-act="setbal">Set balance</button></div></div>';
+  var wk=weekly(A);
+  if(wk){
+    h+='<h3 style="margin:6px 0 0">Balance each week</h3><p class="xs muted">Planned. Assumes you pay each bill by its pay-by date and spend your living money evenly. Your real balance above only changes when you check a bill.</p>'+
+    '<div class="scroll"><table><thead><tr><th>Week of</th><th>In</th><th>Out</th><th>Balance</th></tr></thead><tbody>'+
+    wk.map(function(w){return '<tr><td>'+fShort(w.start)+'</td><td class="num">'+(w.inn?money0(w.inn):'-')+'</td><td class="num">'+(w.out?money0(w.out):'-')+'</td><td class="num" style="font-weight:600;color:var(--'+(w.bal<0?'bad':'ink')+')">'+money0(w.bal)+'</td></tr>';}).join('')+
+    '</tbody></table></div>';
+  }
+  return h+'</section>';
+}
 function viewPay(A){
+  syncBalance(A);
   var st=S.settings;
   var rows=A.active.rows.filter(function(r){return r.date<=addDays(st.asOf,210);});
   var next=rows.filter(function(r){return r.date>=TODAY;})[0]||rows[0];
@@ -545,6 +585,7 @@ function viewPay(A){
   rows.forEach(function(r){r.items.forEach(function(it){if(!S.paid[it.key]&&daysBetween(TODAY,it.due)<=3)att.push(it);});});
   att.sort(function(a,b){return a.due<b.due?-1:1;});
   var out='<div class="card info small" style="display:flex;flex-direction:column;gap:8px"><span>Got a new pay stub? Add it and I will read it and show exactly what to pay and what is left.</span><span><label class="btn pri" for="file-stub-home" style="display:inline-block">Add pay stub (PDF or photo)</label><input type="file" id="file-stub-home" accept="application/pdf,.pdf,image/*" multiple hidden></span></div>';
+  out+=balHTML(A);
   if(daysBetween(st.asOf,TODAY)>14)out+='<div class="card info small">Your balances are from '+fShort(st.asOf)+'. Update them in the Paycheck tab so the extra payments stay accurate.</div>';
   if(next){
     var nextLeft=next.billsTotal;var nextEntry=((S.docs.checks&&S.docs.checks.map)||{})[next.date]||null;
@@ -864,6 +905,7 @@ function applyCheck(){
   var ck=((S.docs.checks&&S.docs.checks.map)||{})[r.date]||{};
   log.push({date:r.date,net:r.income,bills:r.billsTotal,living:r.living,alloc:r.allocTotal||0,extra:r.extraTotal,left:r.left,held:r.held||0,hold:{savings:+ck.savings||0,cash:+ck.cash||0,other:+ck.other||0,label:ck.otherLabel||''},at:TODAY});
   wSet('debts',{items:debts});wUpd('paid',{map:pm});wSet('log',{items:log});
+  var bl=S.settings.bal;if(bl){var o3=Object.assign({},bl.out||{});r.items.forEach(function(it){o3[it.key]=it.amount;});wUpd('settings',{bal:Object.assign({},bl,{out:o3})});}
   wUpd('settings',{asOf:addDays(r.date,1)});
   S.chk.date=null;S.chk.msg='';render();window.scrollTo(0,0);
   toast('Done. Balances updated. Your next check is ready.');
@@ -889,6 +931,7 @@ $('#app').addEventListener('change',function(e){
 });
 $('#app').addEventListener('click',function(e){
   if(e.target.closest('[data-act="apply-check"]'))applyCheck();
+  if(e.target.closest('[data-act="setbal"]')){var bi=document.getElementById('bal-in'),bv=bi?parseFloat(bi.value):NaN;if(isFinite(bv)){wUpd('settings',{bal:{amount:r2(bv),date:TODAY,inc:{},out:{}}});render();toast('Balance set.');}else toast('Type your balance first.');return;}
   var pb=e.target.closest('[data-act="preset"]');
   if(pb){
     var A=scenarios(),r=simFor(A).rows.filter(function(x){return x.date===S.chk.date;})[0];if(!r)return;
@@ -987,7 +1030,9 @@ $('#app').addEventListener('change',function(e){
   if(t.dataset.paid){
     var key=t.dataset.paid,val=t.checked?TODAY:null;
     var card=t.closest('details.pc');if(card)S.userOpen.add(card.dataset.date);
-    S.paid=Object.assign({},S.paid);S.paid[key]=val;render();
+    S.paid=Object.assign({},S.paid);S.paid[key]=val;
+    var fb=S.settings.bal;if(fb){var fi=findItem(key);var o2=Object.assign({},fb.out||{});if(val&&fi)o2[key]=fi.it.amount;else delete o2[key];wUpd('settings',{bal:Object.assign({},fb,{out:o2})});}
+    render();
     wUpd('paid',{map:(function(){var o={};o[key]=val;return o;})()});return;
   }
   if(t.dataset.set){
